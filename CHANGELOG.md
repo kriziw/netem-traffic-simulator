@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.7.0...v0.7.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* refresh controlled target health diagnostics ([#24](https://github.com/kriziw/netem-traffic-simulator/issues/24)) ([fcbfda8](https://github.com/kriziw/netem-traffic-simulator/commit/fcbfda8e05f2b210544f9df6531ef73136e60140))
+
 ## [0.7.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.6.0...v0.7.0) (2026-10-09)
 
 
