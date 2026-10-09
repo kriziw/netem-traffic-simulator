@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.5.1...v0.6.0) (2026-10-09)
+
+
+### Features
+
+* add update screen and only offer updates newer than the running version ([701c9c4](https://github.com/kriziw/netem-traffic-simulator/commit/701c9c4b7b53f468ec8d59f65ea6df8b1c9b30d5))
+* add update screen and only offer updates newer than the running version ([15d4a0b](https://github.com/kriziw/netem-traffic-simulator/commit/15d4a0b3cb7676173f95c4e2e9cb1f00b5a05595))
+
 ## [0.5.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.5.0...v0.5.1) (2026-10-09)
 
 
