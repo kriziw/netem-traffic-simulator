@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import queue
 import random
 import socket
@@ -49,6 +50,34 @@ def combined_application_weights(persona: str, global_mix: dict) -> dict:
     if total <= 0:
         return {key: 1 for key in APPLICATIONS}
     return combined
+
+
+BENCHMARK_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def target_host_is_lab_safe(hostname: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except OSError:
+        return False
+    addresses = set()
+    for info in infos:
+        try:
+            addresses.add(ipaddress.ip_address(info[4][0]))
+        except (ValueError, IndexError):
+            continue
+    if not addresses:
+        return False
+    for address in addresses:
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address in BENCHMARK_NETWORK
+        ):
+            continue
+        return False
+    return True
 
 
 class CorporateUser(HttpUser):
@@ -312,6 +341,13 @@ class WorkloadController:
         parsed = urlsplit(target)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ValueError("Target must be an http:// or https:// base URL.")
+        if target != self.settings.default_target and not target_host_is_lab_safe(
+            parsed.hostname
+        ):
+            raise ValueError(
+                "Target override must resolve only to private, link-local, loopback "
+                "or RFC2544 198.18.0.0/15 lab addresses."
+            )
 
         personas = normalized_mix(
             raw.get("personas") or profile["personas"], PERSONAS
