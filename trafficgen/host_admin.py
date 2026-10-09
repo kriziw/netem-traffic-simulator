@@ -44,6 +44,7 @@ def management():
 
 
 def version_tuple(value):
+    value = value.removeprefix('netem-traffic-simulator-')
     if not re.fullmatch(r'v?\d+\.\d+\.\d+', value):
         raise ValueError('Only stable semantic-version releases are supported.')
     return tuple(map(int, value.lstrip('v').split('.')))
@@ -59,6 +60,7 @@ def check_release():
         raise ValueError('Release is not stable.')
     current = (APP_DIR / 'trafficgen/version.txt').read_text().strip()
     result = {'tag': tag, 'current': current, 'available': latest > version_tuple(current),
+              'display_tag': 'v' + '.'.join(map(str, latest)),
               'url': 'https://github.com/kriziw/netem-traffic-simulator/releases/tag/' + tag,
               'checked_at': time.time()}
     atomic_json(ADMIN_DIR / 'release.json', result)
@@ -93,7 +95,7 @@ def install_release(expected_tag):
         root = Path(temporary)
         source = root / 'source'
         run(['git', 'clone', '--quiet', '--depth', '1', '--branch', release['tag'], '--', REPOSITORY, str(source)], timeout=120)
-        if (source / 'trafficgen/version.txt').read_text().strip() != release['tag'].lstrip('v'):
+        if version_tuple((source / 'trafficgen/version.txt').read_text().strip()) != version_tuple(release['tag']):
             raise ValueError('Release tag and packaged version disagree.')
         backup = root / 'backup'
         shutil.copytree(APP_DIR, backup, symlinks=True)
@@ -116,7 +118,7 @@ def install_release(expected_tag):
             run(['systemctl', 'daemon-reload'])
             run(['systemctl', 'restart', 'netem-traffic-simulator'], timeout=30)
             raise ValueError('Update failed; previous installation restored. ' + str(exc)) from exc
-    return {'version': release['tag'], 'message': 'Update installed; simulator restarted.'}
+    return {'version': release.get('display_tag', release['tag']), 'message': 'Update installed; simulator restarted.'}
 
 
 def exact_routes(target):

@@ -18,3 +18,20 @@ test('DEM animation reaches exact samples, with real gaps retained',()=>{
   ui.animatePath(path,ui.pathFor([0,null,100]));
   assert.equal((path.d.match(/M/g)||[]).length,2);
 });
+
+test('controls post to the action attribute when a named input shadows form.action', async () => {
+  let submit, sent;
+  class Form {constructor(){this.method='post';this.action={name:'action',value:'check_update'};}
+    getAttribute(name){return name==='action'?'/settings/system/action':null;}
+    querySelectorAll(){return [];}
+    setAttribute(){} removeAttribute(){}}
+  class Data {constructor(form){this.form=form;} append(){}}
+  const ctx={window:{},document:{addEventListener:(name,fn)=>{submit=fn;},getElementById:()=>({textContent:''})},
+    HTMLFormElement:Form,FormData:Data,URL,location:{href:'https://simulator.example/',origin:'https://simulator.example'},
+    fetch:async(url,options)=>{sent={url,options};return {ok:false,status:400};}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  const form=new Form();await submit({target:form,defaultPrevented:false,preventDefault(){}});
+  assert.equal(sent.url,'https://simulator.example/settings/system/action');
+  assert.equal(sent.options.method,'POST');
+  assert.equal(sent.options.body.form,form);
+});
