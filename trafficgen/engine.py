@@ -14,9 +14,10 @@ import uuid
 from urllib.parse import urlsplit
 
 import gevent
-import requests
 from locust import HttpUser, task
 from locust.env import Environment
+# After locust: importing it monkey-patches ssl, which must not be loaded yet.
+import requests
 
 from . import __version__
 from .database import (
