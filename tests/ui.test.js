@@ -75,3 +75,22 @@ test('diagnosis renders escaped findings, per-WAN rows and the application timin
     video:{experience_score:70,availability_pct:70,p95_ms:30,media:{loss_pct:0.4,bursts:10,bursts_with_loss:3,no_reply:0},top_cause:'media_loss',causes:{media_loss:3},requests:10}},diagnosis.cause_labels);
   assert.match(apps,/4\.3 s/);assert.match(apps,/↓ 11\.2 Mbit\/s/);assert.match(apps,/0\.40% · 3\/10 bursts/);assert.match(apps,/Media packet loss ×3/);
 });
+
+test('target update controls reflect remote state and never enable installation during a workload',()=>{
+  const fields={};for(const id of ['target-status','target-release-status','target-job-status','target-release-tag'])fields[id]={textContent:'',value:''};
+  const buttons=['target_status','target_check','target_install'].map(action=>({dataset:{targetAction:action},disabled:false}));
+  const ctx={window:{},document:{addEventListener(){},getElementById:id=>fields[id],querySelectorAll:()=>buttons}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  const state={ready:true,busy:false,workload_active:false,target:{connected:true,host:'192.168.10.20',version:'0.7.0',
+    busy:false,release:{tag:'v0.8.0',available:true},job:{message:'Verified'}}};
+  ctx.window.TrafficGen.renderTargetState(state);
+  assert.match(fields['target-status'].textContent,/installed v0.7.0/);
+  assert.equal(fields['target-release-tag'].value,'v0.8.0');
+  assert.equal(buttons[2].disabled,false);
+  state.workload_active=true;ctx.window.TrafficGen.renderTargetState(state);
+  assert.equal(buttons[2].disabled,true);assert.equal(buttons[1].disabled,false);
+  state.target.busy=true;ctx.window.TrafficGen.renderTargetState(state);
+  assert.ok(buttons.every(button=>button.disabled));assert.match(fields['target-job-status'].textContent,/running/);
+  state.target={connected:false};ctx.window.TrafficGen.renderTargetState(state);
+  assert.ok(buttons.every(button=>button.disabled));assert.equal(fields['target-release-tag'].value,'');
+});

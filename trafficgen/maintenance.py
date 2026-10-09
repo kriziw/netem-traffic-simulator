@@ -27,8 +27,8 @@ def version_tuple(value):
     return tuple(map(int, value.lstrip('v').split('.')))
 
 
-def release_status():
-    release = read_json(ADMIN_DIR / 'release.json', {})
+def release_status(admin_dir=None):
+    release = read_json((admin_dir or ADMIN_DIR) / 'release.json', {})
     if not isinstance(release, dict):
         return {}
     # release.json is cached by the last check and outlives installs; compare with the running version.
@@ -39,25 +39,27 @@ def release_status():
     return release
 
 
-def status(settings):
-    state = read_json(ADMIN_DIR / 'status.json', {})
-    ready = (ADMIN_DIR / 'install-manifest.json').is_file()
+def status(settings, admin_dir=None):
+    admin_dir = admin_dir or ADMIN_DIR
+    state = read_json(admin_dir / 'status.json', {})
+    ready = (admin_dir / 'install-manifest.json').is_file()
     queued = (settings.runtime_dir / 'admin-request.json').exists()
     active = state.get('state') == 'running' and time.time() - state.get('timestamp', 0) < 1800
     request = read_json(settings.runtime_dir / 'admin-request.json', {}) if queued else {}
     updating = (active and state.get('action') == 'install_update') or (
         isinstance(request, dict) and request.get('action') == 'install_update')
     return {'ready': ready, 'busy': queued or active, 'updating': updating, 'job': state,
-            'selected': read_json(ADMIN_DIR / 'route.json'),
-            'inventory': read_json(ADMIN_DIR / 'proxmox-status.json', {}),
-            'interface_configs': read_json(ADMIN_DIR / 'interfaces.json', {}),
-            'release': release_status()}
+            'selected': read_json(admin_dir / 'route.json'),
+            'inventory': read_json(admin_dir / 'proxmox-status.json', {}),
+            'interface_configs': read_json(admin_dir / 'interfaces.json', {}),
+            'release': release_status(admin_dir)}
 
 
-def enqueue(settings, action, payload=None):
-    if action not in ('check_update', 'install_update', 'scan', 'route', 'clear_route', 'configure_interface', 'forget_interface', 'configure_inventory', 'disconnect_inventory'):
+def enqueue(settings, action, payload=None, admin_dir=None):
+    if action not in ('check_update', 'install_update', 'scan', 'route', 'clear_route', 'configure_interface', 'forget_interface', 'configure_inventory', 'disconnect_inventory',
+                      'configure_target', 'disconnect_target', 'target_status', 'target_check', 'target_install'):
         raise ValueError('Unsupported administration action.')
-    state = status(settings)
+    state = status(settings, admin_dir) if admin_dir else status(settings)
     if not state['ready']:
         raise ValueError('Run the current install-lxc.sh once as root to enable host management.')
     if state['busy']:

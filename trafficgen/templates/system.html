@@ -9,8 +9,9 @@
 <div class="actions">
 <form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="check_update"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Check for updates</button></form>
 <form method="post" action="{{ url_for('system_action') }}" onsubmit="return confirm('Install the latest stable release and restart the simulator?');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="install_update"><input type="hidden" name="tag" value="{{ system.release.tag or '' }}"><button class="btn primary" id="install-update" {% if not system.ready or system.busy or not system.release.available or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Install update</button></form>
-</div><p class="muted">Updates preserve passwords, API keys, certificates, saved appliances and run history. The service restarts briefly. Update the controlled target to the same release separately when required.</p>
+</div><p class="muted">Updates preserve passwords, API keys, certificates, saved appliances and run history. The simulator restarts briefly. Use Controlled target updates below to update the modem when required.</p>
 </div></section>
+{% include "_target_updates.html" %}
 <section class="card space-top"><div class="card-head"><div class="card-title">Data interfaces</div></div><div class="card-body">
 <div id="route-health" class="flash {{ 'error' if system.route_health.state == 'error' else 'info' }}" role="status">{{ system.route_health.message }}</div>
 {% if system.network.error %}<div class="flash error">{{ system.network.error }}</div>{% endif %}

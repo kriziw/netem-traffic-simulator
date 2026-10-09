@@ -1,0 +1,23 @@
+[Unit]
+Description=Controlled target HTTPS update API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trafficgen-target-manager
+Group=trafficgen-target-manager
+WorkingDirectory=/opt/netem-traffic-simulator
+EnvironmentFile=/etc/netem-traffic-target-manager/manager.env
+ExecStart=/opt/netem-traffic-simulator/.venv/bin/python -m trafficgen.target_manager
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/netem-traffic-target-manager
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

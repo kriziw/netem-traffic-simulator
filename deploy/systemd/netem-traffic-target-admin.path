@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch controlled target update requests
+
+[Path]
+PathExists=/var/lib/netem-traffic-target-manager/admin-request.json
+Unit=netem-traffic-target-admin.service
+
+[Install]
+WantedBy=multi-user.target
