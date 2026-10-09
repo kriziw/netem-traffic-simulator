@@ -156,7 +156,8 @@ window.TrafficGen = (() => {
         document.getElementById('system-job').textContent=state.busy?('Working: '+(job.action||'queued task')+'…'):(job.message||'No administration task yet.');
         if(previous===true&&!state.busy){await refreshPage();return;}previous=state.busy;
         if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag);
-        if(state.selected)document.getElementById('selected-route').textContent=state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
+        const health=document.getElementById('route-health');if(health&&state.route_health){health.textContent=state.route_health.message;health.classList.toggle('error',state.route_health.state==='error');}
+        if(state.selected)document.getElementById('selected-route').textContent='Saved selection: '+state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
         if(state.scanned_candidates?.length){
           const body=document.getElementById('gateway-candidates');
           body.replaceChildren(...state.scanned_candidates.map(candidate=>{

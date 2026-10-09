@@ -17,7 +17,7 @@ import time
 from urllib.request import Request, urlopen
 
 from .maintenance import ADMIN_DIR, read_json
-from .network import discover, ip_json, run, validate_route
+from .network import discover, ip_json, run, validate_route, validate_interface, interfaces
 
 APP_DIR = Path('/opt/netem-traffic-simulator')
 RUNTIME_DIR = Path('/var/lib/netem-traffic-simulator')
@@ -176,6 +176,62 @@ def clear_route():
     return {'message': 'Managed target route removed; existing default routes are unchanged.'}
 
 
+
+def configure_interface(payload, persist=True):
+    config = validate_interface(payload, management())
+    name = config['interface']
+    saved = read_json(ADMIN_DIR / 'interfaces.json', {})
+    if name in saved and saved[name] != config:
+        raise ValueError('Stop restoring the old saved interface configuration before changing it.')
+    link = next(r for r in ip_json('address', 'show') if r.get('ifname', '').split('@')[0] == name)
+    was_up = 'UP' in link.get('flags', [])
+    had_address = any(a.get('family') == 'inet' and f"{a['local']}/{a['prefixlen']}" == config['address'] for a in link.get('addr_info', []))
+    added = False
+    try:
+        run(['ip', 'link', 'set', 'dev', name, 'up'])
+        if not had_address:
+            run(['ip', '-4', 'address', 'add', config['address'], 'dev', name])
+            added = True
+        rows = interfaces(management())
+        actual = next((r for r in rows if r['interface'] == name), None)
+        if not actual or not actual['up'] or config['address'] not in actual['addresses']:
+            raise ValueError('The data interface did not become configured. Check container network permissions.')
+        if persist:
+            saved[name] = config
+            atomic_json(ADMIN_DIR / 'interfaces.json', saved)
+    except Exception:
+        if added:
+            run(['ip', '-4', 'address', 'del', config['address'], 'dev', name])
+        if not was_up:
+            run(['ip', 'link', 'set', 'dev', name, 'down'])
+        raise
+    return {'message': f"{name} enabled with {config['address']}. Saved for boot restoration; verify the appliance next."}
+
+
+def forget_interface(payload):
+    name = str(payload.get('interface', ''))
+    saved = read_json(ADMIN_DIR / 'interfaces.json', {})
+    saved.pop(name, None)
+    atomic_json(ADMIN_DIR / 'interfaces.json', saved)
+    return {'message': 'Boot restoration removed. Current addresses and routing are unchanged.'}
+
+
+def restore_network():
+    failures = []
+    for config in read_json(ADMIN_DIR / 'interfaces.json', {}).values():
+        try:
+            configure_interface(config, persist=False)
+        except Exception as exc:
+            failures.append(str(exc))
+    route = read_json(ADMIN_DIR / 'route.json')
+    if route:
+        try:
+            apply_route(route, verify=False)
+        except Exception as exc:
+            failures.append(str(exc))
+    if failures:
+        raise ValueError('; '.join(failures))
+
 def process_request():
     request_path = RUNTIME_DIR / 'admin-request.json'
     try:
@@ -213,6 +269,10 @@ def process_request():
             atomic_json(ADMIN_DIR / 'discovery.json', result)
         elif job['action'] == 'route':
             result = apply_route(payload)
+        elif job['action'] == 'configure_interface':
+            result = configure_interface(payload)
+        elif job['action'] == 'forget_interface':
+            result = forget_interface(payload)
         elif job['action'] == 'clear_route':
             result = clear_route()
         else:
@@ -238,9 +298,7 @@ def main():
     with (ADMIN_DIR / 'worker.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if args.restore_route:
-            route = read_json(ADMIN_DIR / 'route.json')
-            if route:
-                apply_route(route, verify=False)
+            restore_network()
         else:
             process_request()
 

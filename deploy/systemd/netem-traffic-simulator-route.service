@@ -1,5 +1,5 @@
 [Unit]
-Description=Restore selected simulator benchmark route
+Description=Restore saved simulator data interfaces and benchmark route
 After=network-online.target
 Wants=network-online.target
 Before=netem-traffic-simulator.service
