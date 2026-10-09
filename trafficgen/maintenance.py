@@ -4,8 +4,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import time
 import uuid
+
+from . import __version__
 
 ADMIN_DIR = Path('/var/lib/netem-traffic-simulator-admin')
 
@@ -17,16 +20,38 @@ def read_json(path, default=None):
         return default
 
 
+def version_tuple(value):
+    value = value.removeprefix('netem-traffic-simulator-')
+    if not re.fullmatch(r'v?\d+\.\d+\.\d+', value):
+        raise ValueError('Only stable semantic-version releases are supported.')
+    return tuple(map(int, value.lstrip('v').split('.')))
+
+
+def release_status():
+    release = read_json(ADMIN_DIR / 'release.json', {})
+    if not isinstance(release, dict):
+        return {}
+    # release.json is cached by the last check and outlives installs; compare with the running version.
+    try:
+        release['available'] = version_tuple(str(release.get('tag', ''))) > version_tuple(__version__)
+    except ValueError:
+        release['available'] = False
+    return release
+
+
 def status(settings):
     state = read_json(ADMIN_DIR / 'status.json', {})
     ready = (ADMIN_DIR / 'install-manifest.json').is_file()
     queued = (settings.runtime_dir / 'admin-request.json').exists()
     active = state.get('state') == 'running' and time.time() - state.get('timestamp', 0) < 1800
-    return {'ready': ready, 'busy': queued or active, 'job': state,
+    request = read_json(settings.runtime_dir / 'admin-request.json', {}) if queued else {}
+    updating = (active and state.get('action') == 'install_update') or (
+        isinstance(request, dict) and request.get('action') == 'install_update')
+    return {'ready': ready, 'busy': queued or active, 'updating': updating, 'job': state,
             'selected': read_json(ADMIN_DIR / 'route.json'),
             'inventory': read_json(ADMIN_DIR / 'proxmox-status.json', {}),
             'interface_configs': read_json(ADMIN_DIR / 'interfaces.json', {}),
-            'release': read_json(ADMIN_DIR / 'release.json', {})}
+            'release': release_status()}
 
 
 def enqueue(settings, action, payload=None):

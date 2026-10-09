@@ -36,6 +36,18 @@ test('controls post to the action attribute when a named input shadows form.acti
   assert.equal(sent.options.body.form,form);
 });
 
+test('update screen follows install, restart, reconnect and the final job result',()=>{
+  const {ui}=context();
+  const updating={updating:true,job:{action:'install_update',state:'running'}};
+  assert.equal(ui.updatePhase(updating,false),'installing');
+  assert.equal(ui.updatePhase(null,false),'restarting');
+  assert.equal(ui.updatePhase(updating,true),'reconnecting');
+  assert.equal(ui.updatePhase({updating:false,job:{action:'install_update',state:'completed'}},true),'complete');
+  assert.equal(ui.updatePhase({updating:false,job:{action:'install_update',state:'failed',message:'restored'}},true),'failed');
+  // Status lost or replaced: reload so the page shows the real state instead of waiting forever.
+  assert.equal(ui.updatePhase({updating:false,job:{}},true),'complete');
+});
+
 test('selecting an appliance prefills identity and routing fields while preserving the target',()=>{
   const fields={};for(const id of ['interface','gateway','name','vendor','model','firmware'])fields['appliance-'+id]={value:''};
   fields['appliance-target']={value:'198.18.0.1'};fields['detected-appliance-details']={textContent:''};

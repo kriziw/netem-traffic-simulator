@@ -133,7 +133,8 @@ def create_app():
     @app.get("/settings/system/data")
     @admin_required
     def system_data():
-        return jsonify(system_snapshot())
+        # The update screen polls this across the restart and reloads once the new version answers.
+        return jsonify({**system_snapshot(), "version": __version__})
 
     @app.post("/settings/system/action")
     @admin_required
@@ -173,6 +174,8 @@ def create_app():
                 elif action == "forget_interface":
                     payload = {"interface": request.form.get("interface", "")}
                 elif action == "install_update":
+                    if not maintenance.release_status().get("available"):
+                        raise ValueError(f"v{__version__} is already the latest checked release. Check for updates again.")
                     payload = {"tag": request.form.get("tag", "")}
                 maintenance.enqueue(settings, action, payload)
                 flash("Task queued. Its result will appear below without refreshing the page.", "info")

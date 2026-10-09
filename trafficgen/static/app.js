@@ -146,9 +146,68 @@ window.TrafficGen = (() => {
     }
     const details=document.getElementById('detected-appliance-details');if(details)details.textContent=(data.candidateEvidence||'No exposed identity')+'. Gateway role requires Verify & select.';
   }
+  const UPDATE_STEPS=[['installing','Installing release'],['restarting','Restarting service'],['reconnecting','Reconnecting']];
+  const UPDATE_TEXT={
+    installing:['Installing update','Downloading the release and keeping a rollback copy. The simulator restarts shortly.'],
+    restarting:['Restarting simulator','The service is offline while the new version installs and starts. This page reconnects automatically.'],
+    reconnecting:['Finishing update','The simulator is back online. Waiting for the update worker to confirm the new service.'],
+    complete:['Update complete','Reloading…'],failed:['Update failed','']};
+  let updateActive=false;
+  // state: /settings/system/data payload, or null while the service is unreachable.
+  function updatePhase(state,sawDowntime){
+    if(!state)return 'restarting';
+    if(state.updating)return sawDowntime?'reconnecting':'installing';
+    const job=state.job||{};
+    return job.action==='install_update'&&job.state==='failed'?'failed':'complete';
+  }
+  function updateScreen(from,to){
+    if(updateActive)return;updateActive=true;
+    cleanups.splice(0).forEach(stop=>stop());
+    const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!=null)node.textContent=text;return node;};
+    const screen=el('div','update-screen'),card=el('div','update-card'),ring=el('div','update-ring');
+    screen.setAttribute('role','dialog');screen.setAttribute('aria-modal','true');screen.setAttribute('aria-labelledby','update-title');
+    ring.append(el('span','update-mark','NT'));
+    const title=el('h2',null,UPDATE_TEXT.installing[0]);title.id='update-title';
+    const message=el('p','update-message');message.setAttribute('aria-live','polite');
+    const steps=el('ol','update-steps'),items=UPDATE_STEPS.map(([,label])=>steps.appendChild(el('li',null,label)));
+    const meta=el('div','update-meta mono'),actions=el('div','update-actions');
+    card.append(ring,title,el('div','update-versions mono','v'+from+(to?' → '+to:'')),message,steps,meta,actions);card.tabIndex=-1;
+    screen.append(card);document.body.append(screen);document.body.classList.add('update-active');card.focus();
+    const started=Date.now();let sawDowntime=false,phase='installing',reached=0;
+    const clock=setInterval(()=>{
+      const s=Math.floor((Date.now()-started)/1000);
+      meta.textContent='Elapsed '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+(s>600?' · taking longer than usual; see journalctl -u netem-traffic-simulator-admin':'');
+    },1000);
+    function render(state){
+      const index=phase==='complete'?UPDATE_STEPS.length:UPDATE_STEPS.findIndex(([key])=>key===phase);
+      if(index>=0)reached=index;
+      items.forEach((item,i)=>item.className=i<reached?'done':i===reached?(phase==='failed'?'failed':'active'):'');
+      screen.className='update-screen '+phase;title.textContent=UPDATE_TEXT[phase][0];
+      message.textContent=phase==='complete'?'Now running v'+state.version+'. Reloading…':phase==='failed'?(state.job.message||'The update did not finish.'):UPDATE_TEXT[phase][1];
+      if(phase==='failed'){const back=el('button','btn primary','Back to System');back.type='button';back.addEventListener('click',()=>location.reload());actions.replaceChildren(back);back.focus();}
+    }
+    async function poll(){
+      let state=null;
+      try{
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000);
+        const response=await fetch('/settings/system/data',{cache:'no-store',signal:controller.signal});clearTimeout(timer);
+        // A non-JSON success is the sign-in page: let the browser show it.
+        if(response.ok&&!(response.headers.get('content-type')||'').includes('json')){location.reload();return;}
+        if(response.ok)state=await response.json();
+      }catch(_){}
+      if(!state)sawDowntime=true;
+      phase=updatePhase(state,sawDowntime);render(state);
+      if(phase==='complete'||phase==='failed')clearInterval(clock);
+      if(phase==='complete')setTimeout(()=>location.reload(),2000);
+      else if(phase!=='failed')setTimeout(poll,2000);
+    }
+    render(null);poll();
+  }
   function systemPage(){
     let alive=true;cleanups.push(()=>alive=false);
-    let previous=document.getElementById('system-job').dataset.busy==='true';
+    const jobStatus=document.getElementById('system-job');
+    if(jobStatus.dataset.updating==='true'){updateScreen(jobStatus.dataset.version,jobStatus.dataset.release);return;}
+    let previous=jobStatus.dataset.busy==='true';
     document.getElementById('detected-appliance')?.addEventListener('change',event=>{
       const option=event.target.selectedOptions[0];if(!option?.value)return;
       fillAppliance(option.dataset);
@@ -157,10 +216,11 @@ window.TrafficGen = (() => {
       try{
         const response=await fetch('/settings/system/data',{cache:'no-store'});if(!response.ok)return;
         const state=await response.json();if(!alive)return;
+        if(state.updating){updateScreen(state.version,state.release.display_tag||state.release.tag);return;}
         const job=state.job||{};
-        document.getElementById('system-job').textContent=state.busy?('Working: '+(job.action||'queued task')+'…'):(job.message||'No administration task yet.');
+        jobStatus.textContent=state.busy?('Working: '+(job.action||'queued task')+'…'):(job.message||'No administration task yet.');
         if(previous===true&&!state.busy){await refreshPage();return;}previous=state.busy;
-        if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag);
+        if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag)+(state.release.available?' · update available':' · up to date');
         const health=document.getElementById('route-health');if(health&&state.route_health){health.textContent=state.route_health.message;health.classList.toggle('error',state.route_health.state==='error');}
         if(state.selected)document.getElementById('selected-route').textContent='Saved selection: '+state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
         const select=document.getElementById('detected-appliance');
@@ -179,5 +239,5 @@ window.TrafficGen = (() => {
       }catch(_){}
     }poll();repeat(poll,2000);
   }
-  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance};
+  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen};
 })();
