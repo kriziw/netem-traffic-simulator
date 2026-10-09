@@ -37,6 +37,7 @@ def init_db(path: Path):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
                 run_id TEXT,
+                endpoint_id TEXT,
                 persona TEXT,
                 application TEXT,
                 request_type TEXT NOT NULL,
@@ -50,6 +51,8 @@ def init_db(path: Path):
                 ON transactions(timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_run
                 ON transactions(run_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_transactions_endpoint
+                ON transactions(endpoint_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_app
                 ON transactions(application, timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_persona
@@ -71,6 +74,16 @@ def init_db(path: Path):
                 ON dem_samples(timestamp);
             """
         )
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
+        }
+        if "endpoint_id" not in columns:
+            conn.execute("ALTER TABLE transactions ADD COLUMN endpoint_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
+                "ON transactions(endpoint_id, timestamp)"
+            )
 
 
 def create_run(path: Path, run: dict):
@@ -110,13 +123,14 @@ def record_transaction(path: Path, item: dict):
         conn.execute(
             """
             INSERT INTO transactions (
-                timestamp, run_id, persona, application, request_type, name,
+                timestamp, run_id, endpoint_id, persona, application, request_type, name,
                 success, response_time_ms, response_length, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.get("timestamp", time.time()),
                 item.get("run_id"),
+                item.get("endpoint_id"),
                 item.get("persona"),
                 item.get("application"),
                 item.get("request_type", "HTTP"),
@@ -179,7 +193,7 @@ def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000
     with connect(path) as conn:
         rows = conn.execute(
             f"""
-            SELECT timestamp, run_id, persona, application, request_type, name,
+            SELECT timestamp, run_id, endpoint_id, persona, application, request_type, name,
                    success, response_time_ms, response_length, error
             FROM transactions
             WHERE {' AND '.join(clauses)}
