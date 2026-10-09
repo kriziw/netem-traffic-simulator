@@ -26,6 +26,29 @@
   </div>
 </section>
 
+<section class="card space-top">
+  <div class="card-head">
+    <div><div class="card-title">Simulated endpoints</div><div class="card-sub">Individual virtual-user experience · worst experience first</div></div>
+  </div>
+  <div class="card-body table-wrap">
+    <table>
+      <thead><tr><th>Endpoint</th><th>Persona</th><th>Score</th><th>Availability</th><th>P95</th><th>Requests</th></tr></thead>
+      <tbody id="dem-endpoints">
+      {% for endpoint_id,item in summary.endpoints.items() %}
+      <tr>
+        <td class="mono">{{ endpoint_id }}</td>
+        <td>{{ item.persona|replace('_',' ')|title }}</td>
+        <td>{{ item.experience_score if item.experience_score is not none else '—' }}</td>
+        <td>{{ "%.1f"|format(item.availability_pct) if item.availability_pct is not none else '—' }}%</td>
+        <td>{{ "%.0f"|format(item.p95_ms) if item.p95_ms is not none else '—' }} ms</td>
+        <td>{{ item.requests }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <div class="grid grid-2 space-top">
   <section class="card">
     <div class="card-head"><div><div class="card-title">Applications</div><div class="card-sub">Experience by synthetic application class</div></div></div>
