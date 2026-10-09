@@ -187,6 +187,16 @@ def test_release_naming_matches_netem():
     assert 'package-name' not in config['packages']['.']
 
 
+def test_update_worker_version_file_is_release_managed():
+    # install_release compares the release tag with trafficgen/version.txt, so Release Please must rewrite that file.
+    config = json.loads(Path('release-please-config.json').read_text())
+    manifest = json.loads(Path('.release-please-manifest.json').read_text())
+    assert config['packages']['.']['version-file'] == 'trafficgen/version.txt'
+    assert 'trafficgen/version.txt' not in config['packages']['.'].get('extra-files', [])
+    assert Path('trafficgen/version.txt').read_text().strip() == manifest['.']
+    assert not Path('version.txt').exists()
+
+
 def test_inventory_keeps_down_unaddressed_data_interfaces():
     with patch.object(network, 'ip_json', return_value=[
         {'ifname': 'eth0', 'flags': ['UP'], 'addr_info': [{'family': 'inet', 'scope': 'global', 'local': '192.168.0.135', 'prefixlen': 24}]},

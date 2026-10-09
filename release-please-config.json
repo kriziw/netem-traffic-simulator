@@ -3,10 +3,7 @@
   "packages": {
     ".": {
       "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        "version.txt",
-        "trafficgen/version.txt"
-      ]
+      "version-file": "trafficgen/version.txt"
     }
   },
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",

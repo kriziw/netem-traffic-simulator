@@ -24,4 +24,4 @@ include = ["trafficgen*"]
 trafficgen = ["version.txt", "templates/*.html", "static/*"]
 
 [tool.setuptools.dynamic]
-version = {file = "version.txt"}
+version = {file = "trafficgen/version.txt"}

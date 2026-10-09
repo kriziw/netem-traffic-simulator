@@ -89,10 +89,11 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          json.loads(Path("release-please-config.json").read_text())
-          json.loads(Path(".release-please-manifest.json").read_text())
-          version = Path("version.txt").read_text().strip()
-          if not version:
-              raise SystemExit("version.txt is empty")
+          config = json.loads(Path("release-please-config.json").read_text())
+          manifest = json.loads(Path(".release-please-manifest.json").read_text())
+          version_file = config["packages"]["."]["version-file"]
+          version = Path(version_file).read_text().strip()
+          if version != manifest["."]:
+              raise SystemExit(f"{version_file} ({version!r}) does not match the release manifest ({manifest['.']!r})")
           print("PASS release configuration", version)
           PY
