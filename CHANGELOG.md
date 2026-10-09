@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.1...v0.3.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* restore service access to installed application directory ([c216533](https://github.com/kriziw/netem-traffic-simulator/commit/c216533769c49b0b35c1d69dd2667ccd702cdb8f))
+* restore service access to installed application directory ([d7e6f21](https://github.com/kriziw/netem-traffic-simulator/commit/d7e6f21ca6c4e40e6850767c8f2ebf7b4314143e))
+
 ## [0.3.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.0...v0.3.1) (2026-10-09)
 
 
