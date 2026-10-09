@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.0...v0.3.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* restore GUI controls and align simulator release naming ([d483b46](https://github.com/kriziw/netem-traffic-simulator/commit/d483b46271d76a4af6b2205749318d8f23bc6d8c))
+* restore GUI controls and align simulator release naming ([700ed87](https://github.com/kriziw/netem-traffic-simulator/commit/700ed87621d15304a7941559b5cd6e9be9941397))
+
 ## [0.3.0](https://github.com/kriziw/netem-traffic-simulator/compare/netem-traffic-simulator-v0.2.1...netem-traffic-simulator-v0.3.0) (2026-10-09)
 
 
