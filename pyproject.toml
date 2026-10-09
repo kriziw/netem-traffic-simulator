@@ -1,0 +1,14 @@
+[project]
+name = "netem-traffic-simulator"
+dynamic = ["version"]
+description = "Corporate endpoint traffic simulation and digital experience measurement companion for NetEm WAN Lab"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+  "Flask==3.1.2",
+  "locust==2.46.7",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
