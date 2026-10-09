@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.2...v0.4.0) (2026-10-09)
+
+
+### Features
+
+* recover data interfaces and report inactive appliance routes ([c88cde8](https://github.com/kriziw/netem-traffic-simulator/commit/c88cde8385d0d944c39eaa3886caa189e1b17f7c))
+* recover data interfaces and report inactive appliance routes ([34dea48](https://github.com/kriziw/netem-traffic-simulator/commit/34dea48a72c7feb18a97da3e4f2bac5195d3c63e))
+
 ## [0.3.2](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.1...v0.3.2) (2026-10-09)
 
 
