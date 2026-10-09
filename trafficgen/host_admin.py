@@ -74,7 +74,8 @@ def files_manifest():
     for directory in ('trafficgen', 'scripts', 'deploy'):
         paths.extend(p for p in (APP_DIR / directory).rglob('*') if p.is_file()
                      and '__pycache__' not in p.parts and not p.is_symlink())
-    paths.extend(APP_DIR / name for name in ('requirements.txt', 'version.txt') if (APP_DIR / name).is_file())
+    if (APP_DIR / 'requirements.txt').is_file():
+        paths.append(APP_DIR / 'requirements.txt')
     return {str(p.relative_to(APP_DIR)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 

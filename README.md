@@ -442,12 +442,12 @@ The repository uses **Release Please**, with tags and release titles such as `v0
 
 Version state is held in:
 
-- `version.txt`
+- `trafficgen/version.txt` (the single version file; Release Please rewrites it as the `simple` strategy `version-file`)
 - `.release-please-manifest.json`
 - `release-please-config.json`
 - `CHANGELOG.md`
 
-Conventional commits and squash-merge titles such as `feat:` and `fix:` drive semantic release PRs. Optionally configure `RELEASE_PLEASE_TOKEN` with repository contents, pull request and issue permissions so generated release PRs trigger CI; the default GitHub token can create releases but does not trigger follow-on workflows. Release Please owns version/changelog updates, including the packaged `trafficgen/version.txt`.
+Conventional commits and squash-merge titles such as `feat:` and `fix:` drive semantic release PRs. Optionally configure `RELEASE_PLEASE_TOKEN` with repository contents, pull request and issue permissions so generated release PRs trigger CI; the default GitHub token can create releases but does not trigger follow-on workflows. Release Please owns version/changelog updates. The update worker refuses a release whose `trafficgen/version.txt` differs from its tag, so do not add a second version file or list it under `extra-files`: plain-text extra files are only rewritten on lines carrying an `x-release-please-version` marker.
 
 ## License
 
@@ -474,6 +474,15 @@ With a managed target route, you can keep the normal management default gateway 
 ### Stable-release updates
 
 Use **Check for updates**, then **Install update** while the workload is stopped. The worker revalidates the newest stable semantic-version GitHub release, clones only the fixed repository/tag, rejects modified installed files, keeps a rollback copy of the application and virtual environment, and runs the native installer. Passwords, API keys, certificates and runtime data remain outside the application directory. A failed installation restores the old application and virtual environment and attempts to restart the old service; inspect systemd logs if recovery fails. Updates require Internet access, enough disk space for the backup, and may briefly interrupt the management connection while the service restarts.
+
+Releases v0.3.0 to v0.5.0 shipped a stale `trafficgen/version.txt` (`0.2.0`), so **Install update** to one of them fails with `Release tag and packaged version disagree` and **Check for updates** always offers an update. Installations on those versions can update normally from the UI to a later release. To install one of the affected releases from the console instead, run as root on the simulator (replace `v0.5.0` with the tag you want):
+
+```bash
+git clone --depth 1 --branch v0.5.0 https://github.com/kriziw/netem-traffic-simulator.git /var/tmp/ntg-update
+cp /var/tmp/ntg-update/version.txt /var/tmp/ntg-update/trafficgen/version.txt
+bash /var/tmp/ntg-update/scripts/install-lxc.sh
+rm -rf /var/tmp/ntg-update
+```
 
 The controlled target has no management GUI and must be updated separately with `scripts/install-target.sh`, to the same release when a protocol change requires it.
 
