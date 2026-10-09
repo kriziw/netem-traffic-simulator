@@ -66,6 +66,85 @@ APPLICATIONS = {
         "latency_good_ms": 120,
         "latency_poor_ms": 600,
     },
+    # Industry applications. They reuse the target's bounded endpoints and UDP echo,
+    # so they need no target update; only their sizes, mix and thresholds differ.
+    "ot_telemetry": {
+        "class": "realtime",
+        "label": "OT telemetry",
+        "description": "Machine and SCADA polling: short UDP exchanges that tolerate no loss.",
+        "latency_good_ms": 50,
+        "latency_poor_ms": 200,
+    },
+    "mes": {
+        "class": "interactive",
+        "label": "MES",
+        "description": "Manufacturing execution transactions from the shop floor.",
+        "latency_good_ms": 150,
+        "latency_poor_ms": 600,
+    },
+    "erp": {
+        "class": "interactive",
+        "label": "ERP",
+        "description": "ERP screens and postings.",
+        "latency_good_ms": 400,
+        "latency_poor_ms": 1500,
+    },
+    "plm_cad": {
+        "class": "bulk",
+        "label": "PLM / CAD",
+        "description": "Large engineering model check-outs and check-ins.",
+        "latency_good_ms": 2000,
+        "latency_poor_ms": 10000,
+    },
+    "pos": {
+        "class": "interactive",
+        "label": "Point of sale",
+        "description": "Card payments and till transactions; availability-critical.",
+        "latency_good_ms": 250,
+        "latency_poor_ms": 1000,
+    },
+    "wms_scan": {
+        "class": "interactive",
+        "label": "Warehouse scanning",
+        "description": "Frequent small scan confirmations from handheld terminals.",
+        "latency_good_ms": 200,
+        "latency_poor_ms": 800,
+    },
+    "emr": {
+        "class": "interactive",
+        "label": "Medical records",
+        "description": "Electronic medical record screens and updates.",
+        "latency_good_ms": 400,
+        "latency_poor_ms": 1500,
+    },
+    "pacs_imaging": {
+        "class": "bulk",
+        "label": "Medical imaging",
+        "description": "Diagnostic image studies retrieved from central archives.",
+        "latency_good_ms": 2500,
+        "latency_poor_ms": 10000,
+    },
+    "core_banking": {
+        "class": "interactive",
+        "label": "Core banking",
+        "description": "Teller and advisor transactions against core banking.",
+        "latency_good_ms": 300,
+        "latency_poor_ms": 1200,
+    },
+    "cctv_backhaul": {
+        "class": "bulk",
+        "label": "CCTV backhaul",
+        "description": "Security camera footage uploaded to central storage.",
+        "latency_good_ms": 2000,
+        "latency_poor_ms": 8000,
+    },
+    "guest_internet": {
+        "class": "bulk",
+        "label": "Guest internet",
+        "description": "Visitor and guest Wi-Fi downloads.",
+        "latency_good_ms": 3000,
+        "latency_poor_ms": 12000,
+    },
 }
 
 PERSONAS = {
@@ -125,19 +204,56 @@ PERSONAS = {
             "file_sync": 12,
         },
     },
+    "shop_floor": {
+        "label": "Shop-floor operator",
+        "applications": {"mes": 45, "erp": 10, "web_saas": 12, "collaboration": 10, "voice": 10, "dns": 8, "wms_scan": 5},
+    },
+    "engineer": {
+        "label": "Engineer",
+        "applications": {"plm_cad": 30, "erp": 10, "web_saas": 18, "collaboration": 14, "video": 14, "file_sync": 8, "dns": 6},
+    },
+    "ot_device": {
+        "label": "OT device",
+        "applications": {"ot_telemetry": 100},
+    },
+    "camera": {
+        "label": "Security camera",
+        "applications": {"cctv_backhaul": 100},
+    },
+    "store_associate": {
+        "label": "Store associate",
+        "applications": {"pos": 50, "web_saas": 14, "wms_scan": 10, "collaboration": 10, "voice": 10, "dns": 6},
+    },
+    "warehouse_operator": {
+        "label": "Warehouse operator",
+        "applications": {"wms_scan": 55, "erp": 20, "voice": 10, "collaboration": 5, "dns": 10},
+    },
+    "clinician": {
+        "label": "Clinician",
+        "applications": {"emr": 45, "pacs_imaging": 15, "voice": 14, "collaboration": 10, "web_saas": 10, "dns": 6},
+    },
+    "banker": {
+        "label": "Banker",
+        "applications": {"core_banking": 50, "web_saas": 18, "video": 10, "collaboration": 12, "dns": 10},
+    },
+    "guest": {
+        "label": "Guest",
+        "applications": {"guest_internet": 70, "video": 20, "web_saas": 10},
+    },
 }
 
 MEDIA_MODES = {
     "strict": {
         "label": "Strict",
         "description": "Any lost packet fails a voice or video burst.",
-        "tolerance_pct": {"voice": 0.0, "video": 0.0},
+        "tolerance_pct": {"voice": 0.0, "video": 0.0, "ot_telemetry": 0.0},
     },
     "realistic": {
         "label": "Realistic",
         "description": "Small random loss that codecs usually conceal is accepted: voice up to 2% "
-                       "(1 of 50 packets) and video up to 1% (2 of 200 packets) per burst.",
-        "tolerance_pct": {"voice": 2.0, "video": 1.0},
+                       "(1 of 50 packets) and video up to 1% (2 of 200 packets) per burst. "
+                       "OT telemetry still fails on any loss.",
+        "tolerance_pct": {"voice": 2.0, "video": 1.0, "ot_telemetry": 0.0},
     },
 }
 

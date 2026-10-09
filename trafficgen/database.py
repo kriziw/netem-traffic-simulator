@@ -117,6 +117,8 @@ def init_db(path: Path):
         run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
         if "media_mode" not in run_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'strict'")
+        if "label" not in run_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN label TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
             "ON transactions(endpoint_id, timestamp)"
@@ -129,8 +131,8 @@ def create_run(path: Path, run: dict):
             """
             INSERT INTO runs (
                 run_id, started_at, ended_at, status, profile, target,
-                target_users, spawn_rate, activity, personas_json, applications_json, media_mode
-            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_users, spawn_rate, activity, personas_json, applications_json, media_mode, label
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run["run_id"],
@@ -144,6 +146,7 @@ def create_run(path: Path, run: dict):
                 json.dumps(run["personas"], sort_keys=True),
                 json.dumps(run["applications"], sort_keys=True),
                 run.get("media_mode", "strict"),
+                run.get("label"),
             ),
         )
 
