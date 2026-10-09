@@ -1,7 +1,8 @@
 [Unit]
 Description=NetEm Controlled Traffic Target
-After=network-online.target
+After=network-online.target netem-traffic-target-address.service
 Wants=network-online.target
+Requires=netem-traffic-target-address.service
 
 [Service]
 Type=simple
