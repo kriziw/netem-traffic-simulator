@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import statistics
+import time
 from collections import Counter, defaultdict
 
 from .dem import percentile, summarize_rows
@@ -21,6 +22,8 @@ BULK_BYTES = 64 * 1024
 # Rules need this many timed samples before judging an application.
 MIN_SAMPLES = 5
 BANDWIDTH_SHARE = 0.6
+# Short window showing where traffic goes right now, e.g. to time SD-WAN steering.
+RECENT_SECONDS = 10
 
 CAUSES = {
     "connect_timeout": "Connect timeout",
@@ -251,6 +254,20 @@ def egress_breakdown(rows):
     return result
 
 
+def recent_egress(rows, now=None, seconds=RECENT_SECONDS):
+    """Transactions per egress address and application over the last few seconds."""
+    since = (now or time.time()) - seconds
+    result = defaultdict(lambda: defaultdict(lambda: {"requests": 0, "failures": 0}))
+    for row in rows:
+        if (row.get("timestamp") or 0) < since:
+            continue
+        counts = result[row.get("egress") or UNKNOWN_EGRESS][row.get("application") or "other"]
+        counts["requests"] += 1
+        counts["failures"] += 0 if row["success"] else 1
+    return {"window_seconds": seconds,
+            "egress": {address: dict(apps) for address, apps in sorted(result.items())}}
+
+
 def _by_egress(rows):
     return dict(Counter(row.get("egress") or UNKNOWN_EGRESS for row in rows).most_common())
 
@@ -429,7 +446,7 @@ def target_finding(info, simulator_version):
     }
 
 
-def diagnose(rows, applications, media_mode="strict"):
+def diagnose(rows, applications, media_mode="strict", now=None):
     """Explain the window: failure causes, interactive response time, experience per
     egress address and ordered findings. `applications` is `application_detail` per app."""
     media_mode = media_mode if media_mode in MEDIA_MODES else "strict"
@@ -445,5 +462,6 @@ def diagnose(rows, applications, media_mode="strict"):
         "interactive_p95_ms": _round(percentile(interactive, 0.95), 3),
         "causes": dict(Counter(row_cause(row) for row in rows if not row["success"]).most_common()),
         "egress": egress_breakdown(rows),
+        "egress_recent": recent_egress(rows, now),
         "findings": findings,
     }

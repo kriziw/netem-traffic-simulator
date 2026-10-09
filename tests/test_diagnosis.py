@@ -248,3 +248,16 @@ def test_media_mode_is_validated_and_adjustable(simulator):
         assert json.loads(json.dumps(client.get("/api/v1/catalog", headers=headers).json))["media_modes"]["realistic"]["tolerance_pct"] == {"voice": 2.0, "video": 1.0}
     finally:
         controller.stop()
+
+
+def test_recent_egress_shows_where_traffic_goes_now():
+    now = time.time()
+    rows = [row(application="video", timestamp=now - 30, egress="198.18.1.2"),
+            row(application="video", timestamp=now - 2, egress="198.18.2.2"),
+            row(application="video", timestamp=now - 1, egress="198.18.2.2", success=False, cause="media_loss"),
+            row(application="dns", timestamp=now - 1, egress=None, success=False, cause="connect_timeout")]
+    _details, result = run_diagnosis(rows)
+    recent = result["egress_recent"]
+    assert recent["window_seconds"] == 10
+    assert recent["egress"] == {"198.18.2.2": {"video": {"requests": 2, "failures": 1}},
+                                "unknown": {"dns": {"requests": 1, "failures": 1}}}
