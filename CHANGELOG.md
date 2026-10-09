@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.5.0...v0.5.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* keep packaged version in sync so in-app updates install ([3dc6b2a](https://github.com/kriziw/netem-traffic-simulator/commit/3dc6b2a0b49898273228a9b47b1fac07a86e5107))
+* keep packaged version in sync so in-app updates install ([82731db](https://github.com/kriziw/netem-traffic-simulator/commit/82731db90f96eff5f6d94089bd6a4262585dcce5))
+
 ## [0.5.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.4.0...v0.5.0) (2026-10-09)
 
 
