@@ -63,7 +63,7 @@ def load_settings() -> Settings:
             os.environ.get("TRAFFICGEN_TLS_KEY", str(config_dir / "tls.key"))
         ),
         default_target=os.environ.get(
-            "TRAFFICGEN_DEFAULT_TARGET", "http://192.168.0.191:8090"
+            "TRAFFICGEN_DEFAULT_TARGET", "http://198.18.0.1:8090"
         ).rstrip("/"),
         target_udp_port=int(os.environ.get("TRAFFICGEN_TARGET_UDP_PORT", "9000")),
     )
