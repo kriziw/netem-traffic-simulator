@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Command Center · NetEm Traffic Simulator{% endblock %}
+{% block crumb %}Command Center{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Corporate endpoint simulation</div>
+    <h1>{{ instance_name }}</h1>
+    <p>Run realistic corporate user populations and watch digital experience as the network changes underneath them.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('workloads') }}">Configure workload</a>
+    {% if status.status not in ('starting','running') %}
+    <a class="btn primary" href="{{ url_for('workloads') }}">Start simulation</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-4">
+  <div class="stat"><span>State</span><strong id="live-state">{{ status.status|upper }}</strong><small id="live-run">{{ status.run.run_id if status.run else 'No active run' }}</small></div>
+  <div class="stat"><span>Virtual users</span><strong id="live-users">{{ status.users }}</strong><small>{{ status.run.target_users if status.run else 0 }} target</small></div>
+  <div class="stat"><span>Experience score</span><strong id="live-score">{{ status.dem.experience_score if status.dem.experience_score is not none else '—' }}</strong><small id="live-rating">{{ status.dem.experience }}</small></div>
+  <div class="stat"><span>Availability</span><strong id="live-availability">{% if status.dem.availability_pct is not none %}{{ "%.2f"|format(status.dem.availability_pct) }}%{% else %}—{% endif %}</strong><small id="live-p95">P95 {{ "%.0f"|format(status.dem.p95_ms) if status.dem.p95_ms is not none else '—' }} ms</small></div>
+</div>
+
+<div class="grid grid-2 space-top">
+  <section class="card">
+    <div class="card-head">
+      <div><div class="card-title">Live endpoint experience</div><div class="card-sub">Last 60 seconds across simulated users</div></div>
+      <a class="btn small" href="{{ url_for('dem_page') }}">Open DEM</a>
+    </div>
+    <div class="card-body">
+      <div class="experience-hero">
+        <div class="experience-score" id="experience-score">{{ status.dem.experience_score if status.dem.experience_score is not none else '—' }}</div>
+        <div><div class="experience-rating" id="experience-rating">{{ status.dem.experience }}</div><div class="muted">Composite availability + response-time experience</div></div>
+      </div>
+      <div class="metric-grid">
+        <div><span>Requests/s</span><strong id="live-rps">{{ status.dem.requests_per_second }}</strong></div>
+        <div><span>Failures/s</span><strong id="live-fps">{{ status.dem.failures_per_second }}</strong></div>
+        <div><span>P50</span><strong id="live-p50">{{ "%.0f"|format(status.dem.p50_ms) if status.dem.p50_ms is not none else '—' }} ms</strong></div>
+        <div><span>P95</span><strong id="live-p95-card">{{ "%.0f"|format(status.dem.p95_ms) if status.dem.p95_ms is not none else '—' }} ms</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><div class="card-title">Current workload</div><div class="card-sub">Population and traffic pattern</div></div></div>
+    <div class="card-body">
+      {% if status.run %}
+      <div class="kv">
+        <span>Profile</span><strong>{{ profiles.profiles[status.run.profile].label }}</strong>
+        <span>Pattern</span><strong>{{ profiles.patterns[status.run.pattern].label }}</strong>
+        <span>Activity</span><strong>{{ status.run.activity|title }}</strong>
+        <span>Target</span><strong class="mono">{{ status.run.target }}</strong>
+        <span>Stage</span><strong>{{ status.run.stage.label if status.run.stage else 'Starting' }}</strong>
+      </div>
+      <div class="actions space-top">
+        <a class="btn" href="{{ url_for('workloads') }}">Adjust</a>
+        <form method="post" action="{{ url_for('workload_stop_ui') }}"><button class="btn danger" type="submit">Stop workload</button></form>
+      </div>
+      {% else %}
+      <div class="empty">No workload is running. Start a profile from Workloads.</div>
+      {% endif %}
+    </div>
+  </section>
+</div>
+
+<section class="card space-top">
+  <div class="card-head"><div><div class="card-title">Recent runs</div><div class="card-sub">Latest simulation history</div></div></div>
+  <div class="card-body table-wrap">
+    {% if runs %}
+    <table><thead><tr><th>Run</th><th>Profile</th><th>Users</th><th>Status</th><th>Started</th></tr></thead><tbody>
+      {% for run in runs %}
+      <tr><td class="mono">{{ run.run_id }}</td><td>{{ run.profile }}</td><td>{{ run.target_users }}</td><td><span class="status">{{ run.status }}</span></td><td data-ts="{{ run.started_at }}"></td></tr>
+      {% endfor %}
+    </tbody></table>
+    {% else %}<div class="empty">No simulation runs yet.</div>{% endif %}
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+TrafficGen.liveStatus();
+TrafficGen.renderTimestamps();
+</script>
+{% endblock %}
