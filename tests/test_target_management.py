@@ -172,7 +172,8 @@ def test_target_worker_rejects_route_actions_even_with_a_forged_queue_file(tmp_p
     assert json.loads((admin / 'status.json').read_text())['state'] == 'failed'
 
 
-def test_target_update_health_failure_restores_code_venv_and_services(tmp_path, monkeypatch):
+@pytest.mark.parametrize('recovering', [False, True])
+def test_target_update_startup_retry_or_rollback(tmp_path, monkeypatch, recovering):
     appdir = tmp_path / 'app'; appdir.mkdir()
     (appdir / 'marker').write_text('old')
     (appdir / '.venv').mkdir(); (appdir / '.venv/marker').write_text('old env')
@@ -198,11 +199,23 @@ def test_target_update_health_failure_restores_code_venv_and_services(tmp_path, 
             (appdir / 'marker').write_text('new')
             (appdir / '.venv/marker').write_text('new env')
         if args[0] == 'curl':
+            if recovering:
+                if sum(call[0] == 'curl' for call in calls) == 1:
+                    raise ValueError('Target is starting')
+                return json.dumps({'service': 'netem-traffic-target', 'version': '99.0.0'})
             return json.dumps({'service': 'netem-traffic-target', 'version': '0.1.0'})
         return ''
     with patch.object(host_admin, 'check_release', return_value={'available': True, 'tag': 'v99.0.0'}), \
          patch.object(host_admin, 'files_manifest', return_value={'marker': 'old'}), \
-         patch.object(host_admin, 'run', side_effect=run):
+         patch.object(host_admin, 'run', side_effect=run), \
+         patch.object(host_admin.time, 'sleep'):
+        if recovering:
+            assert host_admin.install_release('v99.0.0')['version'] == 'v99.0.0'
+            assert (appdir / 'marker').read_text() == 'new'
+            assert (appdir / '.venv/marker').read_text() == 'new env'
+            assert sum(call[0] == 'curl' for call in calls) == 2
+            assert ['systemctl', 'stop', 'netem-traffic-target'] not in calls
+            return
         with pytest.raises(ValueError, match='previous installation restored'):
             host_admin.install_release('v99.0.0')
     assert (appdir / 'marker').read_text() == 'old'

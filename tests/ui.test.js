@@ -90,7 +90,8 @@ test('target update controls reflect remote state and never enable installation 
   state.workload_active=true;ctx.window.TrafficGen.renderTargetState(state);
   assert.equal(buttons[2].disabled,true);assert.equal(buttons[1].disabled,false);
   state.target.busy=true;ctx.window.TrafficGen.renderTargetState(state);
-  assert.ok(buttons.every(button=>button.disabled));assert.match(fields['target-job-status'].textContent,/running/);
+  assert.equal(buttons[0].disabled,false);assert.equal(buttons[1].disabled,true);assert.equal(buttons[2].disabled,true);
+  assert.match(fields['target-job-status'].textContent,/running/);
   state.target={connected:false};ctx.window.TrafficGen.renderTargetState(state);
   assert.ok(buttons.every(button=>button.disabled));assert.equal(fields['target-release-tag'].value,'');
 });

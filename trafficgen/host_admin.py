@@ -110,9 +110,16 @@ def install_release(expected_tag):
             run(['systemctl', 'is-active', SERVICE_NAME], timeout=10)
             if TARGET_ROLE:
                 run(['systemctl', 'is-active', 'netem-traffic-target-manager'], timeout=10)
-                health = json.loads(run(['curl', '--noproxy', '*', '--fail', '--silent', '--show-error',
-                    '--connect-timeout', '5', '--max-time', '10', 'http://127.0.0.1:8090/health'], timeout=12))
-                if health.get('service') != 'netem-traffic-target' or version_tuple(str(health.get('version', ''))) != version_tuple(release['tag']):
+                for attempt in range(10):
+                    try:
+                        health = json.loads(run(['curl', '--noproxy', '*', '--fail', '--silent', '--show-error',
+                            '--connect-timeout', '5', '--max-time', '10', 'http://127.0.0.1:8090/health'], timeout=12))
+                        break
+                    except (ValueError, OSError):
+                        if attempt == 9:
+                            raise
+                        time.sleep(1)
+                if not isinstance(health, dict) or health.get('service') != 'netem-traffic-target' or version_tuple(str(health.get('version', ''))) != version_tuple(release['tag']):
                     raise ValueError('Updated target did not report the expected version.')
         except Exception as exc:
             # Restore code and the old venv, leaving secrets and workload history intact.

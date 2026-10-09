@@ -11,7 +11,7 @@
       {% for action, label in [('target_status', 'Refresh target status'), ('target_check', 'Check target updates')] %}
       <form method="post" action="{{ url_for('system_action') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="{{ action }}">
-        <button class="btn" data-target-action="{{ action }}" {% if not system.ready or system.busy or not target.connected or target.busy %}disabled{% endif %}>{{ label }}</button>
+        <button class="btn" data-target-action="{{ action }}" {% if not system.ready or system.busy or not target.connected or (target.busy and action != 'target_status') %}disabled{% endif %}>{{ label }}</button>
       </form>
       {% endfor %}
       <form method="post" action="{{ url_for('system_action') }}" onsubmit="return confirm('Update the controlled target and briefly restart its traffic service?');">

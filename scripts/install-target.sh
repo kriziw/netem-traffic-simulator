@@ -57,8 +57,8 @@ if [[ -n "${NETEM_TARGET_MANAGEMENT_HOST:-}" || -s "$MANAGER_CONFIG/manager.env"
   chown root:root /var/lib/netem-traffic-target-admin
   chmod 0755 /var/lib/netem-traffic-target-admin
   if [[ -n "${NETEM_TARGET_MANAGEMENT_HOST:-}" ]]; then
-    MANAGER_IP=$(python3 -c 'import ipaddress,sys; a=ipaddress.IPv4Address(sys.argv[1]); assert not (a.is_unspecified or a.is_multicast or a.is_loopback); print(a)' "$NETEM_TARGET_MANAGEMENT_HOST")
-    ip -j -4 address show | python3 -c 'import json,sys; host=sys.argv[1]; rows=json.load(sys.stdin); assert any(a.get("local")==host for r in rows for a in r.get("addr_info",[])), "Management IPv4 address is not configured on this modem"' "$MANAGER_IP"
+    MANAGER_IP=$(python3 -c 'import ipaddress,sys; a=ipaddress.IPv4Address(sys.argv[1]); (a.is_unspecified or a.is_multicast or a.is_loopback) and sys.exit("Choose a specific management IPv4"); print(a)' "$NETEM_TARGET_MANAGEMENT_HOST")
+    ip -j -4 address show | python3 -c 'import json,sys; host=sys.argv[1]; rows=json.load(sys.stdin); any(a.get("local")==host for r in rows for a in r.get("addr_info",[])) or sys.exit("Management IPv4 address is not configured on this modem")' "$MANAGER_IP"
     printf 'NETEM_TARGET_MANAGER_HOST=%s\n' "$MANAGER_IP" > "$MANAGER_CONFIG/manager.env"
   fi
   chown root:"$MANAGER_USER" "$MANAGER_CONFIG/manager.env"

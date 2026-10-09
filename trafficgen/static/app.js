@@ -265,7 +265,7 @@ window.TrafficGen = (() => {
     document.getElementById('target-job-status').textContent=target.busy?'Target task running…':(job.message||'');
     document.getElementById('target-release-tag').value=release.tag||'';
     for(const button of document.querySelectorAll('[data-target-action]')){
-      button.disabled=!state.ready||state.busy||!target.connected||target.busy||
+      button.disabled=!state.ready||state.busy||!target.connected||(target.busy&&button.dataset.targetAction!=='target_status')||
         (button.dataset.targetAction==='target_install'&&(!release.available||state.workload_active));
     }
   }
