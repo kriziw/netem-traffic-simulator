@@ -65,8 +65,8 @@ Suggested starting resources:
 - 2–4 vCPU
 - 2–4 GB RAM
 - 8–16 GB disk
-- management NIC on the same management network as NetEm
-- data NIC on the FortiGate corporate LAN
+- management NIC on the same management network as NetEm, **without a default gateway**
+- data NIC on the FortiGate corporate LAN, with the **default route via the FortiGate**
 
 For larger populations Locust can later be distributed across additional workers.
 
@@ -260,10 +260,14 @@ For lab deployments NetEm can explicitly allow the discovered self-signed certif
 
 The repository also includes a deliberately bounded target service intended to run on the **upstream / ISP-router side** of the lab.
 
+The target installer also adds a persistent RFC 2544 benchmarking loopback:
+
+    198.18.0.1/32
+
 It listens on:
 
-    HTTP/8090
-    UDP/9000
+    http://198.18.0.1:8090
+    UDP 198.18.0.1:9000
 
 It provides:
 
@@ -323,9 +327,11 @@ Test:
 
     curl http://<target-IP>:8090/health
 
-Configure the simulator's target URL as:
+The installer creates the benchmark address automatically. Configure the simulator target as:
 
-    http://<target-IP>:8090
+    http://198.18.0.1:8090
+
+Using a dedicated 198.18.0.0/15 RFC 2544 benchmarking address is important: do not point the workload at the ISP Router's 192.168.0.x management address, because a dual-homed simulator on the same management subnet could bypass the FortiGate/NetEm datapath.
 
 ## API examples
 
@@ -350,7 +356,7 @@ Start 100 office users:
         "spawn_rate": 5,
         "activity": "normal",
         "pattern": "office_day_compressed",
-        "target": "http://192.168.0.191:8090"
+        "target": "http://198.18.0.1:8090"
       }' \
       https://TRAFFIC-GENERATOR:8443/api/v1/workloads/start
 
