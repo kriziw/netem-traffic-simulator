@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Python compile
+        run: |
+          python -m py_compile trafficgen/*.py
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Template validation
+        env:
+          TRAFFICGEN_CONFIG_DIR: ${{ runner.temp }}/trafficgen-config
+          TRAFFICGEN_RUNTIME_DIR: ${{ runner.temp }}/trafficgen-runtime
+          TRAFFICGEN_DATABASE: ${{ runner.temp }}/trafficgen-runtime/traffic.db
+        run: |
+          python - <<'PY'
+          from trafficgen.app import app
+          templates = [
+              "base.html",
+              "login.html",
+              "dashboard.html",
+              "workloads.html",
+              "dem.html",
+              "api.html",
+          ]
+          for template in templates:
+              app.jinja_env.get_template(template)
+              print("PASS", template)
+          app.config["TRAFFICGEN_CONTROLLER"].shutdown()
+          PY
+
+      - name: Shell validation
+        run: |
+          bash -n scripts/install-lxc.sh
+          bash -n scripts/install-target.sh
+
+      - name: Release config validation
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          json.loads(Path("release-please-config.json").read_text())
+          json.loads(Path(".release-please-manifest.json").read_text())
+          version = Path("version.txt").read_text().strip()
+          if not version:
+              raise SystemExit("version.txt is empty")
+          print("PASS release configuration", version)
+          PY
