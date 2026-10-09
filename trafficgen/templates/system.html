@@ -27,26 +27,44 @@
 {% for name, config in system.interface_configs.items() %}<div class="appliance-row"><div class="mono">Saved for boot: {{ name }} · {{ config.address }}</div><form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="forget_interface"><input type="hidden" name="interface" value="{{ name }}"><button class="btn" {% if system.busy or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Stop restoring</button></form></div>{% endfor %}
 <p class="muted">The simulator cannot create Proxmox NICs or repair a disconnected host bridge. Keep Proxmox's address settings consistent with any saved address here.</p>
 </div></section>
+<section class="card space-top"><div class="card-head"><div class="card-title">Read-only Proxmox inventory</div></div><div class="card-body">
+<p class="muted">Match LAN neighbor MAC addresses to VM names and product metadata. Use a dedicated PVEAuditor token with read-only permissions on both its user and token. Appliances exposing no product identity remain Unknown.</p>
+{% if system.inventory.connected %}<p class="mono">Connected: {{ system.inventory.host }} · {{ system.inventory.vm_count }} visible VMs</p><p class="muted mono">TLS SHA-256: {{ system.inventory.fingerprint }}</p>{% endif %}
+{% if system.inventory.error %}<div class="flash error">{{ system.inventory.error }}</div>{% endif %}
+{% for warning in system.inventory.warnings or [] %}<div class="flash warning">{{ warning }}</div>{% endfor %}
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="configure_inventory">
+<div class="form-grid"><div><label>Proxmox management IPv4</label><input name="host" required value="{{ system.inventory.host or '' }}" placeholder="192.168.0.151"></div>
+<div><label>API token ID</label><input name="token_id" required value="{{ system.inventory.token_id or '' }}" placeholder="netem-inventory@pve!discovery"></div>
+<div><label>API token secret</label><input type="password" name="token_secret" required autocomplete="new-password"></div></div>
+<label><input type="checkbox" name="allow_self_signed"> Trust the first self-signed Proxmox certificate and pin its fingerprint</label>
+<p class="muted">Connect only to a host on the management LAN. Verify the displayed fingerprint independently when trusting a self-signed certificate. No VM changes or guest commands are performed.</p>
+<button class="btn primary" {% if not system.ready or system.busy %}disabled{% endif %}>Connect & read inventory</button></form>
+{% if system.inventory.host %}<form method="post" action="{{ url_for('system_action') }}" class="space-top"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="disconnect_inventory"><button class="btn" {% if system.busy %}disabled{% endif %}>Disconnect & remove credentials</button></form>{% endif %}
+</div></section>
 <section class="card space-top"><div class="card-head"><div class="card-title">Discover LAN gateways</div></div><div class="card-body">
-<p class="muted">Neighbor entries and configured gateways are candidates, not verified SD-WAN identities. Vendor labels are user supplied. Fortinet, VeloCloud and Cisco are supported as IP gateways without vendor credentials.</p>
-<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="scan"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Scan data LANs</button></form>
-<p class="muted">Scans only non-management directly connected IPv4 LANs of /24 or smaller. Add and address an LXC data NIC for each separate appliance LAN in Proxmox first.</p>
-<div class="table-wrap"><table><thead><tr><th>Interface</th><th>Candidate gateway</th><th>Evidence</th><th></th></tr></thead><tbody id="gateway-candidates">
-{% for candidate in system.network.candidates %}<tr><td>{{ candidate.interface }}</td><td>{{ candidate.gateway }}</td><td>{{ candidate.evidence }}</td><td><button class="btn small" type="button" data-candidate-interface="{{ candidate.interface }}" data-candidate-gateway="{{ candidate.gateway }}">Use candidate</button></td></tr>{% endfor %}
-</tbody></table></div>
+<p class="muted">Product hints combine Proxmox VM metadata, exposed HTTP/TLS identity and matching LLDP advertisements when lldpd is available. Major virtual SD-WAN vendor signatures are supported; these hints do not confirm a gateway role or firmware authenticity.</p>
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="scan"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Detect appliances on data LANs</button></form>
+<p class="muted">Scans only non-management directly connected IPv4 LANs of /24 or smaller. Identity probes use the candidate's data interface and never follow web redirects. Add and address each data NIC first.</p>
+{% if system.discovery_warning %}<div class="flash warning">{{ system.discovery_warning }}</div>{% endif %}
+<label for="detected-appliance">Detected appliance</label><select id="detected-appliance"><option value="">Select a discovered appliance…</option>
+{% for candidate in system.network.candidates %}<option value="{{ loop.index0 }}" data-candidate-interface="{{ candidate.interface }}" data-candidate-gateway="{{ candidate.gateway }}" data-candidate-name="{{ candidate.name }}" data-candidate-vendor="{{ candidate.vendor }}" data-candidate-model="{{ candidate.model or '' }}" data-candidate-firmware="{{ candidate.firmware or '' }}" data-candidate-evidence="{{ candidate.identity_evidence }} · {{ candidate.confidence }}">{{ candidate.name }} · {{ candidate.vendor if candidate.vendor != 'Other' else 'Unknown' }} · {{ candidate.gateway }} on {{ candidate.interface }}</option>{% endfor %}
+</select><div id="detected-appliance-details" class="field-help" role="status">Select an appliance to prefill its fields, then confirm the LAN gateway.</div>
+{% if system.scanned_at %}<p class="muted">Identity hints last scanned <span data-ts="{{ system.scanned_at }}"></span>. Scan again after changing VM metadata or appliance software.</p>{% endif %}
 <form method="post" action="{{ url_for('system_action') }}" class="space-top">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="save_appliance">
 <div class="form-grid">
-<div><label>Name</label><input name="name" required maxlength="80" placeholder="FortiGate lab"></div>
-<div><label>Vendor label</label><select name="vendor">{% for vendor in vendors %}<option>{{ vendor }}</option>{% endfor %}</select></div>
+<div><label>Name</label><input name="name" id="appliance-name" required maxlength="80" placeholder="FortiGate lab"></div>
+<div><label>Vendor label</label><select name="vendor" id="appliance-vendor">{% for vendor in vendors %}<option>{{ vendor }}</option>{% endfor %}</select></div>
 <div><label>Data interface</label><select name="interface" id="appliance-interface">{% for row in system.network.interfaces %}<option value="{{ row.interface }}">{{ row.interface }} · {{ row.addresses|join(', ') or 'No IPv4 address' }}{% if not row.up %} · Down{% endif %}</option>{% endfor %}</select></div>
 <div><label>LAN gateway IPv4</label><input name="gateway" id="appliance-gateway" required placeholder="10.250.10.1"></div>
+<div><label>Reported model / hint · optional</label><input name="model" id="appliance-model" maxlength="80"></div>
+<div><label>Reported firmware / hint · optional</label><input name="firmware" id="appliance-firmware" maxlength="40"></div>
 <div><label>Controlled target IPv4</label><input name="target" value="198.18.0.1" required></div>
 </div><button class="btn primary space-top">Save appliance</button></form>
 </div></section>
 <section class="card space-top"><div class="card-head"><div class="card-title">Saved appliances</div></div><div class="card-body">
 <div id="selected-route" class="mono">{% if system.selected %}Saved selection: {{ system.selected.target }} → {{ system.selected.gateway }} via {{ system.selected.interface }}{% else %}No managed route selected. Existing OS routing is in use.{% endif %}</div>
-{% for appliance in system.appliances %}<div class="appliance-row"><div><strong>{{ appliance.name }}</strong> · {{ appliance.vendor }}<div class="muted mono">{{ appliance.gateway }} on {{ appliance.interface }} → {{ appliance.target }}</div></div><div class="actions">
+{% for appliance in system.appliances %}<div class="appliance-row"><div><strong>{{ appliance.name }}</strong> · {{ appliance.vendor }}<div class="muted mono">{{ appliance.gateway }} on {{ appliance.interface }} → {{ appliance.target }}{% if appliance.model %} · {{ appliance.model }}{% endif %}{% if appliance.firmware %} · {{ appliance.firmware }}{% endif %}</div></div><div class="actions">
 <form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="route"><input type="hidden" name="appliance_id" value="{{ appliance.id }}"><button class="btn primary" {% if not system.ready or system.busy or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Verify & select</button></form>
 <form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="delete_appliance"><input type="hidden" name="appliance_id" value="{{ appliance.id }}"><button class="btn">Remove</button></form>
 </div></div>{% else %}<div class="empty">Save a candidate or enter a gateway manually.</div>{% endfor %}

@@ -8,7 +8,7 @@ import re
 import subprocess
 
 BENCHMARK = ipaddress.ip_network('198.18.0.0/15')
-VENDORS = ('Fortinet', 'VeloCloud', 'Cisco', 'Other')
+from .appliance_identity import VENDORS
 
 
 def run(args, timeout=8):

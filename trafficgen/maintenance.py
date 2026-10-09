@@ -24,12 +24,13 @@ def status(settings):
     active = state.get('state') == 'running' and time.time() - state.get('timestamp', 0) < 1800
     return {'ready': ready, 'busy': queued or active, 'job': state,
             'selected': read_json(ADMIN_DIR / 'route.json'),
+            'inventory': read_json(ADMIN_DIR / 'proxmox-status.json', {}),
             'interface_configs': read_json(ADMIN_DIR / 'interfaces.json', {}),
             'release': read_json(ADMIN_DIR / 'release.json', {})}
 
 
 def enqueue(settings, action, payload=None):
-    if action not in ('check_update', 'install_update', 'scan', 'route', 'clear_route', 'configure_interface', 'forget_interface'):
+    if action not in ('check_update', 'install_update', 'scan', 'route', 'clear_route', 'configure_interface', 'forget_interface', 'configure_inventory', 'disconnect_inventory'):
         raise ValueError('Unsupported administration action.')
     state = status(settings)
     if not state['ready']:
