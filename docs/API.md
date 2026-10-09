@@ -42,6 +42,10 @@ Example start request:
 
 The start request may also override `personas` and `applications` with percentage/weight maps.
 
+`label` (optional, at most 120 characters) describes what the run represents, for example the site NetEm modelled it on; it is shown on the dashboard and in recent runs.
+
+Besides the generic applications, the catalog includes industry applications that controllers can weight in `applications`: `ot_telemetry` (realtime, any loss fails), `mes`, `erp`, `pos`, `wms_scan`, `emr` and `core_banking` (interactive), and `plm_cad`, `pacs_imaging`, `cctv_backhaul` and `guest_internet` (bulk). Matching personas (`shop_floor`, `engineer`, `ot_device`, `camera`, `store_associate`, `warehouse_operator`, `clinician`, `banker`, `guest`) can be weighted in `personas`. They use the controlled target's existing endpoints, so the target needs no update for them.
+
 `media_mode` decides how much packet loss fails a voice/video burst. `strict` (default) fails a burst on any lost packet. `realistic` accepts small random loss that codecs usually conceal: voice up to 2% (1 of 50 packets) and video up to 1% (2 of 200 packets) per burst. Bursts that get no reply at all fail in both modes. Adjust accepts `media_mode` too; it applies from the next burst. `/api/v1/catalog` lists the modes and their tolerances under `media_modes`.
 
 ## Digital Experience Monitoring

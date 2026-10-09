@@ -330,6 +330,74 @@ class CorporateUser(HttpUser):
         # Roughly 1.9 Mbit/s payload rate for one second.
         self._udp_burst("video", packet_size=1200, packets=200, interval=0.005)
 
+    # Industry applications reuse the target's bounded endpoints; what makes them
+    # distinct is their size, frequency and thresholds in the catalog.
+
+    def _transaction(self, application, name, action):
+        self.client.post(
+            "/api/action",
+            json={"action": action, "value": random.randint(1, 1000)},
+            name=name,
+            context=self._context(application),
+        )
+
+    def _download(self, application, name, path, kb_choices):
+        self.client.get(f"{path}?kb={random.choice(kb_choices)}", name=name, context=self._context(application))
+
+    def _upload(self, application, name, path, kb_choices):
+        self.client.post(
+            path,
+            data=b"u" * (random.choice(kb_choices) * 1024),
+            headers={"Content-Type": "application/octet-stream"},
+            name=name,
+            context=self._context(application),
+        )
+
+    def _app_ot_telemetry(self):
+        # Machine/SCADA polling: 20 short exchanges over one second.
+        self._udp_burst("ot_telemetry", packet_size=120, packets=20, interval=0.05)
+
+    def _app_mes(self):
+        self._transaction("mes", "mes/transaction", "mes-booking")
+        if random.random() < 0.3:
+            self._transaction("mes", "mes/transaction", "mes-confirmation")
+
+    def _app_erp(self):
+        self._download("erp", "erp/screen", "/web/page", [32, 64, 96, 128])
+        if random.random() < 0.4:
+            self._transaction("erp", "erp/posting", "erp-posting")
+
+    def _app_plm_cad(self):
+        if random.random() < 0.7:
+            self._download("plm_cad", "plm/check-out", "/updates/package", [4096, 8192, 12288, 16384])
+        else:
+            self._upload("plm_cad", "plm/check-in", "/files/upload", [2048, 4096, 8192])
+
+    def _app_pos(self):
+        self._transaction("pos", "pos/payment", "payment")
+
+    def _app_wms_scan(self):
+        self._transaction("wms_scan", "wms/scan", "scan")
+
+    def _app_emr(self):
+        self._download("emr", "emr/chart", "/web/page", [64, 128, 192, 256])
+        if random.random() < 0.25:
+            self._transaction("emr", "emr/update", "chart-update")
+
+    def _app_pacs_imaging(self):
+        self._download("pacs_imaging", "pacs/study", "/files/download", [2048, 4096, 6144, 8192])
+
+    def _app_core_banking(self):
+        self._transaction("core_banking", "banking/transaction", "transaction")
+        if random.random() < 0.3:
+            self._download("core_banking", "banking/screen", "/web/page", [24, 48])
+
+    def _app_cctv_backhaul(self):
+        self._upload("cctv_backhaul", "cctv/upload", "/backup/upload", [1024, 2048, 3072, 4096])
+
+    def _app_guest_internet(self):
+        self._download("guest_internet", "guest/download", "/files/download", [1024, 2048, 3072, 4096])
+
 
 class WorkloadController:
     def __init__(self, settings):
@@ -453,7 +521,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -469,6 +537,9 @@ class WorkloadController:
         if pattern not in PATTERNS:
             raise ValueError("Unknown traffic pattern.")
         media_mode = validated_media_mode(raw.get("media_mode", "strict"))
+        label = raw.get("label")
+        if label is not None and (not isinstance(label, str) or len(label.strip()) > 120):
+            raise ValueError("label must be text of at most 120 characters.")
 
         target = str(raw.get("target") or self.settings.default_target).rstrip("/")
         parsed = urlsplit(target)
@@ -507,6 +578,8 @@ class WorkloadController:
             "personas": personas,
             "applications": applications,
             "media_mode": media_mode,
+            # Describes what the run represents, e.g. the site NetEm modelled it on.
+            "label": (label or "").strip() or None,
             "udp_port": self.settings.target_udp_port,
             "stage": None,
             "mix_revision": 0,

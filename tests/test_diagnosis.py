@@ -246,7 +246,7 @@ def test_media_mode_is_validated_and_adjustable(simulator):
         assert response.status_code == 200 and response.json["run"]["media_mode"] == "strict"
         status = client.get("/api/v1/status", headers=headers).json
         assert status["dem"]["diagnosis"]["media_mode"] == "strict"
-        assert json.loads(json.dumps(client.get("/api/v1/catalog", headers=headers).json))["media_modes"]["realistic"]["tolerance_pct"] == {"voice": 2.0, "video": 1.0}
+        assert json.loads(json.dumps(client.get("/api/v1/catalog", headers=headers).json))["media_modes"]["realistic"]["tolerance_pct"] == {"voice": 2.0, "video": 1.0, "ot_telemetry": 0.0}
     finally:
         controller.stop()
 

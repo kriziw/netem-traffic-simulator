@@ -50,6 +50,7 @@
     <div class="card-body">
       {% if status.run %}
       <div class="kv">
+        {% if status.run.label %}<span>Site</span><strong>{{ status.run.label }}</strong>{% endif %}
         <span>Profile</span><strong>{{ profiles.profiles[status.run.profile].label }}</strong>
         <span>Pattern</span><strong>{{ profiles.patterns[status.run.pattern].label }}</strong>
         <span>Activity</span><strong>{{ status.run.activity|title }}</strong>
@@ -73,7 +74,7 @@
     {% if runs %}
     <table><thead><tr><th>Run</th><th>Profile</th><th>Users</th><th>Status</th><th>Started</th></tr></thead><tbody>
       {% for run in runs %}
-      <tr><td class="mono">{{ run.run_id }}</td><td>{{ run.profile }}</td><td>{{ run.target_users }}</td><td><span class="status">{{ run.status }}</span></td><td data-ts="{{ run.started_at }}"></td></tr>
+      <tr><td class="mono">{{ run.run_id }}</td><td>{{ run.label or run.profile }}</td><td>{{ run.target_users }}</td><td><span class="status">{{ run.status }}</span></td><td data-ts="{{ run.started_at }}"></td></tr>
       {% endfor %}
     </tbody></table>
     {% else %}<div class="empty">No simulation runs yet.</div>{% endif %}
