@@ -35,7 +35,7 @@ from .dem import dem_summary
 from .engine import WorkloadController
 from .profiles import profile_payload
 from . import maintenance
-from .network import discover, validate_route, ip_json, VENDORS
+from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface
 
 
 def create_app():
@@ -92,7 +92,7 @@ def create_app():
                 actual = ip_json("route", "get", selected["target"])[0]
             except (OSError, ValueError, IndexError) as exc:
                 raise ValueError("Cannot verify the selected appliance route. Verify & select it again.") from exc
-            if actual.get("dev") != selected["interface"] or actual.get("gateway") != selected["gateway"]:
+            if actual.get("dev") != selected["interface"] or actual.get("gateway") != selected["gateway"] or 'linkdown' in actual.get('flags', []):
                 raise ValueError("The selected appliance route is missing or changed. Verify & select it again.")
             payload.setdefault("target", f"http://{selected['target']}:8090")
             if urlsplit(str(payload.get("target", ""))).hostname != selected["target"]:
@@ -108,10 +108,12 @@ def create_app():
         try:
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
             state["network"] = discover(policy.get("management_interface", "eth0"))
+            state["route_health"] = route_status(state.get("selected"), policy.get("management_interface", "eth0"), state["network"]["interfaces"])
             scanned = maintenance.read_json(maintenance.ADMIN_DIR / "discovery.json", {})
             state["scanned_candidates"] = scanned.get("candidates", [])
         except (OSError, ValueError) as exc:
             state["network"] = {"interfaces": [], "candidates": [], "error": str(exc)}
+            state["route_health"] = {"state": "error", "active": False, "message": "Cannot inspect live network state: " + str(exc)}
         state["appliances"] = saved_appliances()
         return state
 
@@ -130,7 +132,7 @@ def create_app():
     def system_action():
         action = request.form.get("action", "")
         try:
-            host_available(require_idle=action in ("route", "clear_route", "install_update"))
+            host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface"))
             if action == "save_appliance":
                 policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
                 route = validate_route(dict(request.form), policy.get("management_interface", "eth0"))
@@ -154,6 +156,11 @@ def create_app():
                     payload = next((row for row in saved_appliances() if row["id"] == request.form.get("appliance_id")), None)
                     if payload is None:
                         raise ValueError("Choose a saved appliance.")
+                elif action == "configure_interface":
+                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                    payload = validate_interface(dict(request.form), policy.get("management_interface", "eth0"))
+                elif action == "forget_interface":
+                    payload = {"interface": request.form.get("interface", "")}
                 elif action == "install_update":
                     payload = {"tag": request.form.get("tag", "")}
                 maintenance.enqueue(settings, action, payload)

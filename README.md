@@ -486,3 +486,11 @@ systemctl status netem-traffic-simulator-admin.path --no-pager
 journalctl -u netem-traffic-simulator-admin.service -n 100 --no-pager
 ip route get 198.18.0.1
 ```
+
+### Recover a data interface from the GUI
+
+The routing page lists down and unaddressed data NICs and checks the saved route against current interface/address/kernel-route state. A saved selection is not presented as proof of an active path. Missing, down, unaddressed, no-carrier and mismatched routes show an actionable error, refreshed while the page is open.
+
+Stop the workload, choose a data NIC, enter the simulator LAN address with its prefix (for example `eth1`, `10.250.10.10/24`), and click **Enable & save interface**. The root worker brings it up and adds that address without changing management or a default gateway. It saves this configuration outside the service-writable directories and reapplies it at boot before the benchmark route. Existing different addressing and overlap with management are rejected. **Verify & select** then checks target health through the appliance.
+
+**Stop restoring** removes only the simulator's saved boot configuration; it does not remove a live address or route. For installations where Proxmox owns static addressing, configure the same address there and stop simulator restoration to avoid conflicting ownership. The simulator cannot add Proxmox NICs or fix a host bridge/link-down setting; those remain Proxmox tasks.

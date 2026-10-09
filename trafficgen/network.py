@@ -30,8 +30,8 @@ def interfaces(management='eth0'):
             continue
         addresses = [f"{a['local']}/{a['prefixlen']}" for a in link.get('addr_info', [])
                      if a.get('family') == 'inet' and a.get('scope') == 'global']
-        if addresses:
-            rows.append({'interface': name, 'addresses': addresses, 'up': 'UP' in link.get('flags', [])})
+        rows.append({'interface': name, 'addresses': addresses, 'up': 'UP' in link.get('flags', []),
+                     'carrier': 'LOWER_UP' in link.get('flags', [])})
     return rows
 
 
@@ -66,6 +66,8 @@ def discover(management='eth0', scan=False):
         # Active discovery is explicit, limited to directly connected data LANs <= /24.
         hosts = []
         for row in inventory:
+            if not row['up']:
+                continue
             for address in row['addresses']:
                 a = ipaddress.ip_interface(address)
                 if a.network.prefixlen < 24:
@@ -96,3 +98,66 @@ def discover(management='eth0', scan=False):
                 'mac': None, 'evidence': 'configured gateway'})
     return {'interfaces': inventory, 'candidates': list(candidates.values()),
             'note': 'Candidates are not confirmed SD-WAN devices. Verify the LAN gateway and assign a vendor label.'}
+
+
+def route_status(selected, management='eth0', inventory=None):
+    if not selected:
+        return {'state': 'unselected', 'active': False, 'message': 'No managed route selected.'}
+    try:
+        rows = inventory if inventory is not None else interfaces(management)
+        row = next((r for r in rows if r['interface'] == selected['interface']), None)
+        if row is None:
+            raise ValueError(f"{selected['interface']} is missing. Check the Proxmox NIC configuration.")
+        if not row['up']:
+            raise ValueError(f"{selected['interface']} is down. Enable and address it below, then verify the appliance again.")
+        if not row['addresses']:
+            raise ValueError(f"{selected['interface']} has no IPv4 address. Configure its LAN address below.")
+        if row.get('carrier') is False:
+            raise ValueError(f"{selected['interface']} has no carrier. Check its Proxmox bridge and link state.")
+        validate_route(selected, management, rows)
+        if selected.get('source') and selected['source'] not in [str(ipaddress.ip_interface(a).ip) for a in row['addresses']]:
+            raise ValueError('The saved source address is no longer assigned. Verify the appliance again.')
+        actual = ip_json('route', 'get', selected['target'])[0]
+        if actual.get('dev') != selected['interface'] or actual.get('gateway') != selected['gateway'] or 'linkdown' in actual.get('flags', []):
+            raise ValueError('The saved target route is inactive or uses another path. Verify the appliance again.')
+        return {'state': 'active', 'active': True, 'message': 'Route active. Target health was checked when the appliance was selected.'}
+    except (OSError, ValueError, KeyError, IndexError) as exc:
+        return {'state': 'error', 'active': False, 'message': str(exc)}
+
+
+def validate_interface(payload, management='eth0', links=None):
+    if not isinstance(payload, dict):
+        raise ValueError('Interface configuration must be an object.')
+    name = str(payload.get('interface', ''))
+    if name in ('lo', management) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', name):
+        raise ValueError('Choose a data interface; management cannot be changed.')
+    value = str(payload.get('address', ''))
+    if '/' not in value:
+        raise ValueError('Enter the data LAN IPv4 address with a prefix, such as 10.250.10.10/24.')
+    try:
+        address = ipaddress.IPv4Interface(value)
+    except ValueError as exc:
+        raise ValueError('Enter a valid IPv4 address and prefix.') from exc
+    if address.ip.is_multicast or address.ip.is_unspecified or address.ip.is_loopback or address.ip.is_link_local or address.ip.is_reserved or address.ip in BENCHMARK:
+        raise ValueError('Choose a unicast data LAN address, outside the benchmark target range.')
+    if address.network.prefixlen < 31 and address.ip in (address.network.network_address, address.network.broadcast_address):
+        raise ValueError('The network or broadcast address cannot be used for the simulator.')
+    links = links if links is not None else ip_json('address', 'show')
+    found = next((r for r in links if r.get('ifname', '').split('@')[0] == name), None)
+    if not found:
+        raise ValueError('Data interface is missing. Add its NIC in Proxmox first.')
+    if found.get('link_type', 'ether') != 'ether':
+        raise ValueError('Choose an Ethernet data interface.')
+    for row in links:
+        other_name = row.get('ifname', '').split('@')[0]
+        for item in row.get('addr_info', []):
+            if item.get('family') != 'inet':
+                continue
+            existing = ipaddress.IPv4Interface(f"{item['local']}/{item['prefixlen']}")
+            if other_name == management and address.network.overlaps(existing.network):
+                raise ValueError('Data addressing cannot overlap the management subnet.')
+            if other_name != name and address.ip == existing.ip:
+                raise ValueError('That IPv4 address is already assigned to another interface.')
+            if other_name == name and existing != address:
+                raise ValueError('This interface already has different IPv4 addressing. Change it in Proxmox instead.')
+    return {'interface': name, 'address': str(address)}

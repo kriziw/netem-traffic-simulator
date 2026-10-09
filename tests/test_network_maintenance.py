@@ -185,3 +185,106 @@ def test_release_naming_matches_netem():
     assert config['include-v-in-tag'] is True
     assert config['include-v-in-release-name'] is True
     assert 'package-name' not in config['packages']['.']
+
+
+def test_inventory_keeps_down_unaddressed_data_interfaces():
+    with patch.object(network, 'ip_json', return_value=[
+        {'ifname': 'eth0', 'flags': ['UP'], 'addr_info': [{'family': 'inet', 'scope': 'global', 'local': '192.168.0.135', 'prefixlen': 24}]},
+        {'ifname': 'eth1', 'flags': [], 'addr_info': []}]):
+        assert network.interfaces() == [{'interface': 'eth1', 'addresses': [], 'up': False, 'carrier': False}]
+
+
+def test_saved_route_reports_down_missing_address_and_wrong_kernel_path():
+    selected = dict(ROUTE, source='10.250.10.10')
+    for rows, expected in [([], 'missing'), ([dict(INVENTORY[0], up=False)], 'down'),
+                           ([dict(INVENTORY[0], addresses=[])], 'no IPv4')]:
+        with patch.object(network, 'ip_json') as kernel:
+            result = network.route_status(selected, inventory=rows)
+            assert result['state'] == 'error' and expected in result['message']
+            kernel.assert_not_called()
+    with patch.object(network, 'ip_json', return_value=[{'dev': 'eth0', 'gateway': '192.168.0.1'}]):
+        assert network.route_status(selected, inventory=INVENTORY)['state'] == 'error'
+    with patch.object(network, 'ip_json', return_value=[{'dev': 'eth1', 'gateway': '10.250.10.1'}]):
+        assert network.route_status(selected, inventory=INVENTORY)['active']
+
+
+LINKS = [{'ifname': 'eth0', 'link_type': 'ether', 'flags': ['UP'],
+          'addr_info': [{'family': 'inet', 'local': '192.168.0.135', 'prefixlen': 24}]},
+         {'ifname': 'eth1', 'link_type': 'ether', 'flags': [], 'addr_info': []}]
+
+
+def test_interface_recovery_protects_management_and_existing_addresses():
+    payload = {'interface': 'eth1', 'address': '10.250.10.10/24'}
+    assert network.validate_interface(payload, links=LINKS) == payload
+    for change in ({'interface': 'eth0'}, {'interface': 'lo'}, {'interface': 'missing'},
+                   {'address': '192.168.0.10/24'}, {'address': '10.250.10.10'},
+                   {'address': '10.250.10.0/24'}, {'address': '198.18.0.1/24'}, {'interface': 'eth1;sh'}):
+        with pytest.raises(ValueError):
+            network.validate_interface(dict(payload, **change), links=LINKS)
+    addressed = [LINKS[0], dict(LINKS[1], addr_info=[{'family': 'inet', 'local': '10.250.20.10', 'prefixlen': 24}])]
+    with pytest.raises(ValueError, match='different'):
+        network.validate_interface(payload, links=addressed)
+
+
+def test_recovery_enables_addresses_and_persists_without_default_route_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
+    payload = {'interface': 'eth1', 'address': '10.250.10.10/24'}
+    with patch.object(host_admin, 'validate_interface', return_value=payload), \
+         patch.object(host_admin, 'ip_json', return_value=LINKS), \
+         patch.object(host_admin, 'interfaces', return_value=INVENTORY), \
+         patch.object(host_admin, 'run') as command:
+        host_admin.configure_interface(payload)
+    assert json.loads((tmp_path / 'interfaces.json').read_text()) == {'eth1': payload}
+    assert [call.args[0] for call in command.call_args_list] == [
+        ['ip', 'link', 'set', 'dev', 'eth1', 'up'],
+        ['ip', '-4', 'address', 'add', '10.250.10.10/24', 'dev', 'eth1']]
+
+
+def test_failed_recovery_restores_previous_link_and_removes_added_address(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
+    payload = {'interface': 'eth1', 'address': '10.250.10.10/24'}
+    with patch.object(host_admin, 'validate_interface', return_value=payload), \
+         patch.object(host_admin, 'ip_json', return_value=LINKS), \
+         patch.object(host_admin, 'interfaces', return_value=[]), \
+         patch.object(host_admin, 'run') as command:
+        with pytest.raises(ValueError, match='did not become configured'):
+            host_admin.configure_interface(payload)
+    assert command.call_args_list[-2].args[0] == ['ip', '-4', 'address', 'del', '10.250.10.10/24', 'dev', 'eth1']
+    assert command.call_args_list[-1].args[0] == ['ip', 'link', 'set', 'dev', 'eth1', 'down']
+    assert not (tmp_path / 'interfaces.json').exists()
+
+
+def test_boot_restores_interface_before_target_route(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
+    config = {'interface': 'eth1', 'address': '10.250.10.10/24'}
+    (tmp_path / 'interfaces.json').write_text(json.dumps({'eth1': config}))
+    (tmp_path / 'route.json').write_text(json.dumps(ROUTE))
+    calls = []
+    with patch.object(host_admin, 'configure_interface', side_effect=lambda *_args, **_kwargs: calls.append('interface')), \
+         patch.object(host_admin, 'apply_route', side_effect=lambda *_args, **_kwargs: calls.append('route')):
+        host_admin.restore_network()
+    assert calls == ['interface', 'route']
+
+
+def test_gui_reports_stale_selection_and_queues_idle_interface_recovery(simulator, tmp_path, monkeypatch):
+    from trafficgen import app as app_module
+    monkeypatch.setattr(maintenance, 'ADMIN_DIR', tmp_path)
+    (tmp_path / 'install-manifest.json').write_text('{}')
+    (tmp_path / 'route.json').write_text(json.dumps(dict(ROUTE, source='10.250.10.10')))
+    client = simulator.test_client()
+    with client.session_transaction() as session:
+        session['trafficgen_admin'] = True
+        session['csrf_token'] = 'token'
+    with patch.object(app_module, 'discover', return_value={'interfaces': [{'interface': 'eth1', 'up': False, 'carrier': False, 'addresses': []}], 'candidates': []}):
+        state = client.get('/settings/system/data').json
+        assert state['route_health']['state'] == 'error'
+        page = client.get('/settings/system').text
+        assert 'eth1 is down' in page and 'Enable &amp; save interface' in page
+        assert 'value="eth1"' in page
+    data = {'csrf_token': 'token', 'action': 'configure_interface', 'interface': 'eth1', 'address': '10.250.10.10/24'}
+    with patch.object(app_module, 'validate_interface', return_value={'interface': 'eth1', 'address': '10.250.10.10/24'}):
+        response = client.post('/settings/system/action', data=data)
+    assert response.status_code == 302
+    request = json.loads((simulator.config['TRAFFICGEN_SETTINGS'].runtime_dir / 'admin-request.json').read_text())
+    assert request['action'] == 'configure_interface'
+    assert request['payload'] == {'interface': 'eth1', 'address': '10.250.10.10/24'}
