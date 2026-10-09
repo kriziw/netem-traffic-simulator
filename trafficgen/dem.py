@@ -75,7 +75,16 @@ def summarize_rows(rows, application=None):
     ]
     availability = len(successes) * 100.0 / total
     p95 = percentile(latencies, 0.95)
-    latency_component = latency_score(p95, application)
+    if application is not None:
+        latency_component = latency_score(p95, application)
+    else:
+        groups = defaultdict(list)
+        for row in successes:
+            if row["response_time_ms"] is not None:
+                groups[row.get("application")].append(float(row["response_time_ms"]))
+        latency_component = (sum(len(values) * latency_score(percentile(values, 0.95), key)
+                                 for key, values in groups.items()) / sum(map(len, groups.values()))
+                             if groups else None)
     score = availability if latency_component is None else availability * 0.65 + latency_component * 0.35
     score = max(0.0, min(100.0, score))
     return {
@@ -94,7 +103,8 @@ def summarize_rows(rows, application=None):
 
 def dem_summary(database_path, run_id=None, window_seconds=60):
     now = time.time()
-    since = now - max(10, min(3600, int(window_seconds)))
+    window_seconds = max(10, min(3600, int(window_seconds)))
+    since = now - window_seconds
     rows = query_transactions(database_path, since, run_id=run_id, limit=50000)
     overall = summarize_rows(rows)
 
@@ -128,7 +138,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         endpoint_summary[key] = summary
 
     if rows:
-        duration = max(1.0, min(window_seconds, now - rows[0]["timestamp"]))
+        duration = float(window_seconds)
         rps = len(rows) / duration
         failures_per_second = sum(1 for row in rows if not row["success"]) / duration
     else:
@@ -136,6 +146,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         failures_per_second = 0.0
 
     return {
+        "truncated": len(rows) >= 50000,
         "timestamp": now,
         "window_seconds": window_seconds,
         **overall,

@@ -14,10 +14,10 @@
 <section class="card running-card">
   <div class="card-head">
     <div><div class="card-title">Workload running</div><div class="card-sub">{{ status.run.run_id }} · {{ status.users }} / {{ status.run.target_users }} users</div></div>
-    <form method="post" action="{{ url_for('workload_stop_ui') }}"><button class="btn danger" type="submit">Stop</button></form>
+    <form method="post" action="{{ url_for('workload_stop_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn danger" type="submit">Stop</button></form>
   </div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('workload_adjust_ui') }}">
+    <form method="post" action="{{ url_for('workload_adjust_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <div><label>Target users</label><input type="number" name="users" min="1" max="5000" value="{{ status.run.target_users }}"></div>
         <div><label>Spawn rate · users/s</label><input type="number" name="spawn_rate" min="0.1" max="1000" step="0.1" value="{{ status.run.spawn_rate }}"></div>
@@ -31,7 +31,7 @@
 <section class="card">
   <div class="card-head"><div><div class="card-title">Start corporate simulation</div><div class="card-sub">Profile values can be overridden through the REST API when NetEm controls the generator.</div></div></div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('workload_start_ui') }}">
+    <form method="post" action="{{ url_for('workload_start_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <div><label>Workload profile</label><select name="profile" id="profile-select">{% for key,item in catalog.profiles.items() %}<option value="{{ key }}">{{ item.label }}</option>{% endfor %}</select></div>
         <div><label>Virtual users</label><input type="number" name="users" min="1" max="5000" value="50"></div>

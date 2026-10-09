@@ -31,7 +31,7 @@
       <div class="lab-label">LAB USE ONLY</div>
       <div class="small">Locust-powered corporate endpoint simulation</div>
       <div class="small mono">v{{ app_version }}</div>
-      <form method="post" action="{{ url_for('logout') }}">
+      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="link-button" type="submit">Sign out</button>
       </form>
     </div>

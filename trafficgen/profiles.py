@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 APPLICATIONS = {
     "web_saas": {
         "label": "Web / SaaS",
@@ -290,17 +292,23 @@ WORKLOAD_PROFILES = {
 
 
 def normalized_mix(values: dict, allowed: dict) -> dict:
+    if not isinstance(values, dict) or not values:
+        raise ValueError("Mix must be a nonempty object.")
+    if set(values) - set(allowed):
+        raise ValueError("Mix contains unknown entries.")
     clean = {}
     for key in allowed:
         try:
-            value = max(0.0, float(values.get(key, 0)))
-        except (TypeError, ValueError):
-            value = 0.0
+            value = float(values.get(key, 0))
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("Mix weights must be finite nonnegative numbers.") from None
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Mix weights must be finite nonnegative numbers.")
         clean[key] = value
     total = sum(clean.values())
-    if total <= 0:
-        return {key: 0.0 for key in allowed}
-    return {key: value * 100.0 / total for key, value in clean.items()}
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError("Mix must have at least one positive weight.")
+    return {key: value / total * 100.0 for key, value in clean.items()}
 
 
 def profile_payload():

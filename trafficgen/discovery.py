@@ -82,10 +82,13 @@ def discovery_server(settings, stop_event: threading.Event):
             request = json.loads(data.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             continue
-        if request.get("protocol") != DISCOVERY_MAGIC:
+        if not isinstance(request, dict) or request.get("protocol") != DISCOVERY_MAGIC:
             continue
         response = dict(payload)
-        response["nonce"] = request.get("nonce")
+        nonce = request.get("nonce")
+        if not isinstance(nonce, str) or len(nonce) > 128:
+            continue
+        response["nonce"] = nonce
         try:
             sock.sendto(json.dumps(response).encode("utf-8"), peer)
         except OSError:

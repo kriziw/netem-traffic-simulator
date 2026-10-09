@@ -28,7 +28,10 @@ def test_api_auth_and_admin_ui(tmp_path, monkeypatch):
     assert authorized.status_code == 200
 
     admin_password = (config / "admin.password").read_text().strip()
-    login = client.post("/login", data={"password": admin_password})
+    client.get("/login")
+    with client.session_transaction() as state:
+        csrf = state["csrf_token"]
+    login = client.post("/login", data={"password": admin_password, "csrf_token": csrf})
     assert login.status_code in (302, 303)
 
     assert client.get("/").status_code == 200

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from gevent import monkey, signal_handler
+
+# Patch before importing SSL, Flask, threading or the workload engine.
+monkey.patch_all()
+
 import signal
 import threading
 
@@ -36,15 +41,19 @@ def main():
         stop_event.set()
         server.stop(timeout=2)
 
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
+    handlers = [signal_handler(signal.SIGTERM, shutdown), signal_handler(signal.SIGINT, shutdown)]
 
     print(
         f"NetEm Traffic Simulator listening on https://{settings.bind_host}:{settings.api_port}"
     )
     print(f"Admin password file: {settings.admin_password_path}")
     print(f"API key file: {settings.api_key_path}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        stop_event.set()
+        app.config["TRAFFICGEN_CONTROLLER"].shutdown()
+        discovery.join(timeout=2)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,18 +70,25 @@ def load_settings() -> Settings:
     )
 
 
-def _ensure_secret(path: Path, prefix: str = "", bytes_count: int = 32) -> str:
+def _write_secret(path: Path, value: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(value + "\n")
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+    return value
+
+
+def _ensure_secret(path: Path, prefix: str = "", bytes_count: int = 32) -> str:
     if path.exists():
         value = path.read_text().strip()
         if value:
             return value
-    value = prefix + secrets.token_urlsafe(bytes_count)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(value + "\n")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
-    return value
+    return _write_secret(path, prefix + secrets.token_urlsafe(bytes_count))
 
 
 def ensure_api_key(settings: Settings) -> str:
@@ -88,9 +96,7 @@ def ensure_api_key(settings: Settings) -> str:
 
 
 def rotate_api_key(settings: Settings) -> str:
-    if settings.api_key_path.exists():
-        settings.api_key_path.unlink()
-    return ensure_api_key(settings)
+    return _write_secret(settings.api_key_path, "ntg_" + secrets.token_urlsafe(36))
 
 
 def ensure_admin_password(settings: Settings) -> str:

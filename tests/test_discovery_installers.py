@@ -1,0 +1,85 @@
+"""Discovery resilience and sandboxed installer upgrade regressions."""
+import dataclasses
+import json
+import os
+import shutil
+import socket
+import subprocess
+import threading
+from pathlib import Path
+
+import gevent
+import pytest
+
+from trafficgen.discovery import DISCOVERY_MAGIC, discovery_server
+
+
+def test_discovery_survives_non_object_datagrams(simulator):
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    settings = dataclasses.replace(simulator.config["TRAFFICGEN_SETTINGS"], discovery_port=port)
+    stop = threading.Event()
+    listener = gevent.spawn(discovery_server, settings, stop)
+    gevent.sleep(0.02)
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.settimeout(1)
+    try:
+        for payload in ([], None, 42, {"protocol": DISCOVERY_MAGIC, "nonce": []}):
+            probe.sendto(json.dumps(payload).encode(), ("127.0.0.1", port))
+        probe.sendto(json.dumps({"protocol": DISCOVERY_MAGIC, "nonce": "test"}).encode(), ("127.0.0.1", port))
+        payload = json.loads(probe.recv(8192))
+        assert payload["nonce"] == "test"
+        assert payload["service"] == "netem-traffic-simulator"
+        assert "api_key" not in payload
+        assert not listener.dead
+    finally:
+        stop.set()
+        probe.close()
+        listener.kill()
+
+
+@pytest.mark.parametrize("installer", ["install-lxc.sh", "install-target.sh"])
+def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, installer):
+    # Execute actual scripts twice with system operations replaced by stubs.
+    # All absolute write paths are redirected under tmp_path; no host services change.
+    source = Path(__file__).resolve().parents[1]
+    application = tmp_path / "application"
+    application.mkdir()
+    (application / "scripts").mkdir()
+    shutil.copytree(source / "deploy", application / "deploy")
+    (application / "requirements.txt").write_text("# test\n")
+    (application / "source-marker.py").write_text("# must survive in-place reinstall\n")
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in ("api.key", "admin.password", "session.secret", "tls.crt", "tls.key"):
+        (config / name).write_text("preserved-" + name)
+    units = tmp_path / "units"
+    units.mkdir()
+    script = (source / "scripts" / installer).read_text().replace('/opt/netem-traffic-simulator', str(application)).replace('/etc/netem-traffic-simulator', str(config)).replace('/var/lib/netem-traffic-simulator', str(tmp_path / 'runtime')).replace('/etc/systemd/system', str(units)).replace('if [[ $EUID -ne 0 ]]; then', 'if false; then')
+    (application / "scripts" / installer).write_text(script)
+    helper = (source / "scripts/configure-lxc-service.sh").read_text().replace('/etc/systemd/system', str(units))
+    (application / "scripts/configure-lxc-service.sh").write_text(helper)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    logfile = tmp_path / "calls"
+    for name in ("apt-get", "id", "chown", "useradd", "systemctl"):
+        path = bin_dir / name
+        path.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$INSTALL_LOG"\nexit 0\n')
+        path.chmod(0o755)
+    path = bin_dir / "systemd-detect-virt"
+    path.write_text('#!/bin/sh\necho lxc\n')
+    path.chmod(0o755)
+    path = bin_dir / "python3"
+    path.write_text('#!/bin/sh\nmkdir -p "$3/bin"\nprintf "#!/bin/sh\\nexit 0\\n" > "$3/bin/pip"\nchmod +x "$3/bin/pip"\n')
+    path.chmod(0o755)
+    environment = dict(os.environ, PATH=str(bin_dir) + ":" + os.environ["PATH"], INSTALL_LOG=str(logfile))
+    for _ in range(2):
+        subprocess.run(["bash", str(application / "scripts" / installer)], env=environment, check=True, capture_output=True)
+    assert (application / "source-marker.py").exists()
+    assert (config / "api.key").read_text() == "preserved-api.key"
+    assert (config / "tls.key").read_text() == "preserved-tls.key"
+    service = "netem-traffic-simulator" if installer == "install-lxc.sh" else "netem-traffic-target"
+    assert logfile.read_text().count("restart " + service) == 2
+    assert "ProtectSystem=false" in (units / (service + ".service.d") / "10-lxc.conf").read_text()

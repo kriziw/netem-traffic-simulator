@@ -11,12 +11,15 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install dependencies
         run: |
@@ -29,7 +32,7 @@ jobs:
           python -m py_compile trafficgen/*.py
 
       - name: Unit tests
-        run: pytest -q
+        run: python -m gevent.monkey --module pytest -q
 
       - name: Template validation
         env:
@@ -57,6 +60,19 @@ jobs:
         run: |
           bash -n scripts/install-lxc.sh
           bash -n scripts/install-target.sh
+          bash -n scripts/configure-lxc-service.sh
+
+      - name: Build and validate installed package
+        run: |
+          pip wheel --no-deps . -w dist
+          pip install --no-deps --force-reinstall dist/*.whl
+          cd "${{ runner.temp }}"
+          python - <<'PY'
+          from pathlib import Path
+          import trafficgen
+          assert trafficgen.__version__
+          assert Path(trafficgen.__file__).with_name("templates").joinpath("login.html").exists()
+          PY
 
       - name: Release config validation
         run: |

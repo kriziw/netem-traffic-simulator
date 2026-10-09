@@ -3,6 +3,9 @@ from __future__ import annotations
 import atexit
 import copy
 import os
+import hmac
+import secrets
+from urllib.parse import urlsplit
 import time
 
 from flask import (
@@ -40,12 +43,32 @@ def create_app():
 
     app = Flask(__name__)
     app.secret_key = ensure_session_secret(settings)
+    app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True,
+                      SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=1024 * 1024)
     app.config["TRAFFICGEN_SETTINGS"] = settings
     app.config["TRAFFICGEN_CONTROLLER"] = WorkloadController(settings)
 
+    @app.before_request
+    def protect_ui_forms():
+        if request.method == "POST" and not request.path.startswith("/api/v1/"):
+            supplied = request.form.get("csrf_token", "")
+            expected = session.get("csrf_token", "")
+            if not supplied or not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
+                return {"error": "Invalid form token. Reload the page and retry."}, 400
+
+    @app.after_request
+    def private_responses(response):
+        if request.path != "/api/v1/health":
+            response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
+
     @app.context_processor
     def inject_global():
+        session.setdefault("csrf_token", secrets.token_urlsafe(32))
         return {
+            "csrf_token": session["csrf_token"],
             "app_version": __version__,
             "instance_name": settings.instance_name,
             "controller_status": app.config["TRAFFICGEN_CONTROLLER"].status(),
@@ -64,7 +87,10 @@ def create_app():
             session.clear()
             session["trafficgen_admin"] = True
             target = request.args.get("next") or request.form.get("next")
-            return redirect(target or url_for("dashboard"))
+            parsed = urlsplit(target or "")
+            if not target or not target.startswith("/") or target.startswith("//") or parsed.netloc or "\\" in target:
+                target = url_for("dashboard")
+            return redirect(target)
         flash("Invalid administrator password.", "error")
         return render_template("login.html"), 401
 
@@ -245,12 +271,18 @@ def create_app():
     def api_applications():
         return jsonify({"applications": profile_payload()["applications"]})
 
+    def workload_payload():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
+
     @app.post("/api/v1/workloads/start")
     @bearer_required
     def api_workload_start():
         try:
             status = app.config["TRAFFICGEN_CONTROLLER"].start(
-                request.get_json(silent=True) or {}
+                workload_payload()
             )
             return jsonify(status), 201
         except ValueError as exc:
@@ -264,7 +296,7 @@ def create_app():
         try:
             return jsonify(
                 app.config["TRAFFICGEN_CONTROLLER"].adjust(
-                    request.get_json(silent=True) or {}
+                    workload_payload()
                 )
             )
         except ValueError as exc:
@@ -398,6 +430,9 @@ def create_app():
                 "run_id": run_id,
                 "workload_status": status.get("status", "idle"),
                 "active_users": status.get("users", 0),
+                "window_seconds": summary["window_seconds"],
+                "requests": summary["requests"],
+                "truncated": summary["truncated"],
                 "endpoint_experience": {
                     "score": summary["experience_score"],
                     "rating": summary["experience"],

@@ -1,14 +1,18 @@
 window.TrafficGen = (() => {
   function fmt(value,digits=1){
+    if(value==null)return "—";
     const n=Number(value); return Number.isFinite(n)?n.toFixed(digits):"—";
   }
   function pathFor(values){
     if(!values.length) return "";
     const max=100,min=0;
+    let drawing=false;
     return values.map((value,index)=>{
+      if(value==null || !Number.isFinite(Number(value))){drawing=false;return "";}
       const x=values.length===1?0:index/(values.length-1)*100;
       const y=40-(Math.max(min,Math.min(max,Number(value)))-min)/(max-min)*40;
-      return (index?"L":"M")+x.toFixed(2)+","+y.toFixed(2);
+      const command=(drawing?"L":"M")+x.toFixed(2)+","+y.toFixed(2);
+      drawing=true;return command;
     }).join(" ");
   }
   function renderTimestamps(){

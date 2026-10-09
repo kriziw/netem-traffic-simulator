@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import logging
+import math
+import struct
 import queue
 import random
 import socket
@@ -18,7 +21,10 @@ from .database import (
     create_run,
     finish_run,
     record_dem_sample,
-    record_transaction,
+    record_transactions,
+    recover_runs,
+    prune_history,
+    update_run,
 )
 from .dem import dem_summary
 from .profiles import (
@@ -39,17 +45,24 @@ def weighted_choice(weights: dict) -> str:
     return random.choices(keys, weights=values, k=1)[0]
 
 
+def bounded_number(value, name, minimum, maximum, integer=False):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must be a finite number.") from None
+    if isinstance(value, bool) or not math.isfinite(number) or (integer and not number.is_integer()):
+        raise ValueError(f"{name} must be a finite {'integer' if integer else 'number'}.")
+    if not minimum <= number <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}.")
+    return int(number) if integer else number
+
+
 def combined_application_weights(persona: str, global_mix: dict) -> dict:
     persona_weights = PERSONAS.get(persona, PERSONAS["knowledge_worker"])["applications"]
-    combined = {}
-    for app in APPLICATIONS:
-        combined[app] = float(persona_weights.get(app, 0)) * max(
-            0.01, float(global_mix.get(app, 0))
-        )
-    total = sum(combined.values())
-    if total <= 0:
-        return {key: 1 for key in APPLICATIONS}
-    return combined
+    combined = {app: float(persona_weights.get(app, 0)) * float(global_mix.get(app, 0))
+                for app in APPLICATIONS}
+    # A global override can deliberately select an application absent from this persona.
+    return combined if sum(combined.values()) > 0 else dict(global_mix)
 
 
 BENCHMARK_NETWORK = ipaddress.ip_network("198.18.0.0/15")
@@ -70,7 +83,10 @@ def target_host_is_lab_safe(hostname: str) -> bool:
         return False
     for address in addresses:
         if (
-            address.is_private
+            any(address in network for network in (
+                ipaddress.ip_network("10.0.0.0/8"), ipaddress.ip_network("172.16.0.0/12"),
+                ipaddress.ip_network("192.168.0.0/16"), ipaddress.ip_network("fc00::/7")
+            ))
             or address.is_loopback
             or address.is_link_local
             or address in BENCHMARK_NETWORK
@@ -94,6 +110,23 @@ class CorporateUser(HttpUser):
         target = urlsplit(cfg["target"])
         self.udp_host = target.hostname or "127.0.0.1"
         self.udp_port = int(cfg["udp_port"])
+        self.client.trust_env = False
+        self.client.request = self._bounded_request(self.client.request)
+        self.mix_revision = cfg.get("mix_revision", 0)
+
+    @staticmethod
+    def _bounded_request(request):
+        def bounded(*args, **kwargs):
+            kwargs.setdefault("timeout", (5, 10))
+            kwargs.setdefault("allow_redirects", False)
+            if kwargs.get("catch_response"):
+                return request(*args, **kwargs)
+            kwargs["catch_response"] = True
+            with request(*args, **kwargs) as response:
+                if 300 <= response.status_code < 400:
+                    response.failure("Controlled target returned an unexpected redirect.")
+                return response
+        return bounded
 
     def wait_time(self):
         activity = self.runtime_config.get("activity", "normal")
@@ -110,6 +143,11 @@ class CorporateUser(HttpUser):
 
     @task
     def corporate_action(self):
+        revision = self.runtime_config.get("mix_revision", 0)
+        if revision != self.mix_revision:
+            self.persona = weighted_choice(self.runtime_config["personas"])
+            self.mix_revision = revision
+        self.app_weights = combined_application_weights(self.persona, self.runtime_config["applications"])
         app = weighted_choice(self.app_weights)
         handler = getattr(self, f"_app_{app}", self._app_web_saas)
         handler()
@@ -203,27 +241,60 @@ class CorporateUser(HttpUser):
         )
 
     def _udp_burst(self, application, packet_size, packets, interval):
-        started = time.perf_counter()
-        sent = 0
+        # Echoed nonce/sequence headers measure received packets and RTT, not
+        # the intentional one-second pacing duration or local send success.
+        nonce = uuid.uuid4().bytes[:8]
+        sent_times = {}
+        received = {}
+        sock = None
+        receiver = None
+        receive_errors = []
         error = None
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            payload = b"m" * packet_size
-            for _ in range(packets):
-                sock.sendto(payload, (self.udp_host, self.udp_port))
-                sent += len(payload)
+            family, kind, protocol, _, address = socket.getaddrinfo(self.udp_host, self.udp_port, type=socket.SOCK_DGRAM)[0]
+            sock = socket.socket(family, kind, protocol)
+            sock.connect(address)
+            sock.settimeout(0.1)
+
+            def receive():
+                while True:
+                    try:
+                        data = sock.recv(64)
+                    except socket.timeout:
+                        continue
+                    except OSError as exc:
+                        receive_errors.append(exc)
+                        return
+                    if len(data) == 12 and data[:8] == nonce:
+                        sequence = struct.unpack("!I", data[8:])[0]
+                        if sequence in sent_times:
+                            received.setdefault(sequence, (time.perf_counter() - sent_times[sequence]) * 1000)
+
+            receiver = gevent.spawn(receive)
+            for sequence in range(packets):
+                payload = nonce + struct.pack("!I", sequence) + b"m" * (packet_size - 12)
+                sent_times[sequence] = time.perf_counter()
+                sock.send(payload)
                 gevent.sleep(interval)
+            deadline = time.perf_counter() + 0.5
+            while len(received) < packets and time.perf_counter() < deadline and not receiver.dead:
+                gevent.sleep(0.01)
+            if receive_errors:
+                error = receive_errors[0]
+            elif len(received) != packets:
+                error = RuntimeError(f"UDP packet loss: {packets - len(received)}/{packets}")
         except OSError as exc:
             error = exc
         finally:
-            sock.close()
-
-        elapsed_ms = (time.perf_counter() - started) * 1000
+            if receiver is not None:
+                receiver.kill()
+            if sock is not None:
+                sock.close()
         self.environment.events.request.fire(
             request_type="UDP",
             name=f"{application}/media-burst",
-            response_time=elapsed_ms,
-            response_length=sent,
+            response_time=sum(received.values()) / len(received) if received else 0,
+            response_length=len(received) * 12,
             exception=error,
             context=self._context(application),
         )
@@ -241,6 +312,10 @@ class WorkloadController:
     def __init__(self, settings):
         self.settings = settings
         self.lock = threading.RLock()
+        recover_runs(settings.database_path)
+        self.last_pruned = 0
+        self.persistence_error = None
+        self.dropped_transactions = 0
         self.environment = None
         self.runner = None
         self.run = None
@@ -257,15 +332,27 @@ class WorkloadController:
         self.dem_thread.start()
 
     def _writer_loop(self):
-        while not self.stop_event.is_set():
+        while not self.stop_event.is_set() or not self.transaction_queue.empty():
             try:
                 item = self.transaction_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
-                record_transaction(self.settings.database_path, item)
+                batch = [item]
+                gevent.sleep(0.02)
+                while len(batch) < 500:
+                    try:
+                        batch.append(self.transaction_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                record_transactions(self.settings.database_path, batch)
+            except Exception as exc:
+                self.persistence_error = str(exc)[:240]
+                self.dropped_transactions += len(batch)
+                logging.exception("Cannot persist transactions")
             finally:
-                self.transaction_queue.task_done()
+                for _ in batch:
+                    self.transaction_queue.task_done()
 
     def _dem_loop(self):
         while not self.stop_event.wait(2.0):
@@ -274,24 +361,31 @@ class WorkloadController:
                 runner = self.runner
             if not run or run.get("status") not in ("starting", "running"):
                 continue
-            summary = dem_summary(
-                self.settings.database_path,
-                run_id=run["run_id"],
-                window_seconds=60,
-            )
-            users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
-            sample = {
-                "timestamp": time.time(),
-                "run_id": run["run_id"],
-                "users": users,
-                "requests_per_second": summary["requests_per_second"],
-                "failures_per_second": summary["failures_per_second"],
-                "availability_pct": summary["availability_pct"] or 0.0,
-                "p50_ms": summary["p50_ms"],
-                "p95_ms": summary["p95_ms"],
-                "experience_score": summary["experience_score"] or 0.0,
-            }
-            record_dem_sample(self.settings.database_path, sample)
+            try:
+                summary = dem_summary(
+                    self.settings.database_path,
+                    run_id=run["run_id"],
+                    window_seconds=60,
+                )
+                users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
+                sample = {
+                    "timestamp": time.time(),
+                    "run_id": run["run_id"],
+                    "users": users,
+                    "requests_per_second": summary["requests_per_second"],
+                    "failures_per_second": summary["failures_per_second"],
+                    "availability_pct": summary["availability_pct"],
+                    "p50_ms": summary["p50_ms"],
+                    "p95_ms": summary["p95_ms"],
+                    "experience_score": summary["experience_score"],
+                }
+                record_dem_sample(self.settings.database_path, sample)
+                if time.time() - self.last_pruned >= 3600:
+                    prune_history(self.settings.database_path)
+                    self.last_pruned = time.time()
+            except Exception as exc:
+                self.persistence_error = str(exc)[:240]
+                logging.exception("Cannot sample DEM")
 
     def _record_request(
         self,
@@ -320,16 +414,20 @@ class WorkloadController:
         try:
             self.transaction_queue.put_nowait(item)
         except queue.Full:
-            pass
+            self.dropped_transactions += 1
 
     def _validate_start(self, raw: dict):
+        if not isinstance(raw, dict):
+            raise ValueError("Workload configuration must be an object.")
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications"}:
+            raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
         if not profile:
             raise ValueError("Unknown workload profile.")
 
-        users = max(1, min(5000, int(raw.get("users", 50))))
-        spawn_rate = max(0.1, min(1000.0, float(raw.get("spawn_rate", 5))))
+        users = bounded_number(raw.get("users", 50), "users", 1, 5000, integer=True)
+        spawn_rate = bounded_number(raw.get("spawn_rate", 5), "spawn_rate", 0.1, 1000)
         activity = str(raw.get("activity") or profile["activity"])
         if activity not in ACTIVITY:
             raise ValueError("Unknown activity level.")
@@ -339,21 +437,26 @@ class WorkloadController:
 
         target = str(raw.get("target") or self.settings.default_target).rstrip("/")
         parsed = urlsplit(target)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("Target port must be 1-65535.") from None
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+                or port == 0):
             raise ValueError("Target must be an http:// or https:// base URL.")
-        if target != self.settings.default_target and not target_host_is_lab_safe(
-            parsed.hostname
-        ):
+        if not target_host_is_lab_safe(parsed.hostname):
             raise ValueError(
                 "Target override must resolve only to private, link-local, loopback "
                 "or RFC2544 198.18.0.0/15 lab addresses."
             )
 
         personas = normalized_mix(
-            raw.get("personas") or profile["personas"], PERSONAS
+            raw.get("personas", profile["personas"]), PERSONAS
         )
         applications = normalized_mix(
-            raw.get("applications") or profile["applications"], APPLICATIONS
+            raw.get("applications", profile["applications"]), APPLICATIONS
         )
 
         return {
@@ -370,11 +473,12 @@ class WorkloadController:
             "applications": applications,
             "udp_port": self.settings.target_udp_port,
             "stage": None,
+            "mix_revision": 0,
         }
 
     def start(self, raw: dict):
         with self.lock:
-            if self.run and self.run.get("status") in ("starting", "running"):
+            if self.run and self.run.get("status") in ("starting", "running", "stopping"):
                 raise RuntimeError("A workload is already running.")
 
             run = self._validate_start(raw)
@@ -392,10 +496,14 @@ class WorkloadController:
             environment.events.request.add_listener(self._record_request)
             runner = environment.create_local_runner()
 
+            try:
+                create_run(self.settings.database_path, run)
+            except Exception:
+                runner.quit()
+                raise
             self.environment = environment
             self.runner = runner
             self.run = run
-            create_run(self.settings.database_path, run)
 
             pattern = PATTERNS[run["pattern"]]
             if pattern["stages"]:
@@ -410,6 +518,7 @@ class WorkloadController:
                     spawn_rate=run["spawn_rate"],
                 )
                 run["status"] = "running"
+                update_run(self.settings.database_path, run)
                 run["stage"] = {
                     "index": 1,
                     "label": "Steady",
@@ -429,13 +538,13 @@ class WorkloadController:
                     return
                 if self.run.get("status") == "stopping":
                     return
-                target_users = max(
+                target_users = min(5000, max(
                     1,
                     round(
                         self.run["target_users"]
                         * float(stage.get("users_factor", 1.0))
                     ),
-                )
+                ))
                 activity = stage.get("activity", self.run["activity"])
                 self.run["activity"] = activity
                 self.run["status"] = "running"
@@ -444,7 +553,9 @@ class WorkloadController:
                     "label": f'Stage {index}',
                     "users": target_users,
                     "activity": activity,
+                    "users_factor": float(stage.get("users_factor", 1.0)),
                 }
+                update_run(self.settings.database_path, self.run)
                 runner = self.runner
                 spawn_rate = self.run["spawn_rate"]
             if runner:
@@ -454,46 +565,36 @@ class WorkloadController:
         with self.lock:
             if not self.run or self.run.get("status") not in ("starting", "running"):
                 raise RuntimeError("No workload is running.")
-
+            if not isinstance(raw, dict):
+                raise ValueError("Workload configuration must be an object.")
+            if set(raw) - {"users", "spawn_rate", "activity", "personas", "applications"}:
+                raise ValueError("Adjust supports users, spawn_rate, activity, personas and applications only.")
+            candidate = copy.deepcopy(self.run)
             if "users" in raw:
-                users = max(1, min(5000, int(raw["users"])))
-                self.run["target_users"] = users
-            else:
-                users = self.run["target_users"]
-
+                candidate["target_users"] = bounded_number(raw["users"], "users", 1, 5000, integer=True)
             if "spawn_rate" in raw:
-                self.run["spawn_rate"] = max(
-                    0.1, min(1000.0, float(raw["spawn_rate"]))
-                )
-
+                candidate["spawn_rate"] = bounded_number(raw["spawn_rate"], "spawn_rate", 0.1, 1000)
             if "activity" in raw:
-                activity = str(raw["activity"])
-                if activity not in ACTIVITY:
+                if not isinstance(raw["activity"], str) or raw["activity"] not in ACTIVITY:
                     raise ValueError("Unknown activity level.")
-                self.run["activity"] = activity
-
-            if "applications" in raw:
-                self.run["applications"].clear()
-                self.run["applications"].update(
-                    normalized_mix(raw["applications"], APPLICATIONS)
-                )
-
-            if "personas" in raw:
-                self.run["personas"].clear()
-                self.run["personas"].update(
-                    normalized_mix(raw["personas"], PERSONAS)
-                )
-
-            runner = self.runner
-            spawn_rate = self.run["spawn_rate"]
-
-        if runner:
-            runner.start(user_count=users, spawn_rate=spawn_rate)
-        return self.status()
+                candidate["activity"] = raw["activity"]
+            for key, allowed in (("applications", APPLICATIONS), ("personas", PERSONAS)):
+                if key in raw:
+                    candidate[key] = normalized_mix(raw[key], allowed)
+                    candidate["mix_revision"] += 1
+            users = min(5000, max(1, round(candidate["target_users"] *
+                         (candidate.get("stage") or {}).get("users_factor", 1.0))))
+            if candidate.get("stage"):
+                candidate["stage"].update(users=users, activity=candidate["activity"])
+            update_run(self.settings.database_path, candidate)
+            self.run.update(candidate)
+            if self.runner:
+                self.runner.start(user_count=users, spawn_rate=candidate["spawn_rate"])
+            return self.status()
 
     def stop(self):
         with self.lock:
-            if not self.run:
+            if not self.run or self.run.get("status") in ("stopping", "stopped"):
                 return self.status()
             run_id = self.run["run_id"]
             self.run["status"] = "stopping"
@@ -506,6 +607,7 @@ class WorkloadController:
             self.pattern_greenlet = None
         if runner:
             runner.quit()
+        self.transaction_queue.join()
         finish_run(self.settings.database_path, run_id, "stopped")
         with self.lock:
             self.run["status"] = "stopped"
@@ -521,6 +623,8 @@ class WorkloadController:
         users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
         if not run:
             return {
+                "persistence_error": self.persistence_error,
+                "dropped_transactions": self.dropped_transactions,
                 "status": "idle",
                 "run": None,
                 "users": 0,
@@ -531,7 +635,11 @@ class WorkloadController:
             run_id=run["run_id"],
             window_seconds=60,
         )
+        dem["endpoint_count"] = len(dem["endpoints"])
+        dem["endpoints"] = dict(sorted(dem["endpoints"].items(), key=lambda item: item[1]["experience_score"] if item[1]["experience_score"] is not None else 999)[:200])
         return {
+            "persistence_error": self.persistence_error,
+            "dropped_transactions": self.dropped_transactions,
             "status": run["status"],
             "run": run,
             "users": users,
@@ -544,3 +652,5 @@ class WorkloadController:
         except Exception:
             pass
         self.stop_event.set()
+        self.writer_thread.join(timeout=5)
+        self.dem_thread.join(timeout=5)
