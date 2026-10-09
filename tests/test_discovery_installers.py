@@ -41,16 +41,18 @@ def test_discovery_survives_non_object_datagrams(simulator):
 
 
 @pytest.mark.parametrize("installer", ["install-lxc.sh", "install-target.sh"])
-def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, installer):
+@pytest.mark.parametrize("source_location", ["in-place", "private-source"])
+def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, installer, source_location):
     # Execute actual scripts twice with system operations replaced by stubs.
     # All absolute write paths are redirected under tmp_path; no host services change.
     source = Path(__file__).resolve().parents[1]
     application = tmp_path / "application"
-    application.mkdir()
-    (application / "scripts").mkdir()
-    shutil.copytree(source / "deploy", application / "deploy")
-    (application / "requirements.txt").write_text("# test\n")
-    (application / "source-marker.py").write_text("# must survive in-place reinstall\n")
+    installation_source = application if source_location == "in-place" else tmp_path / "private-source"
+    installation_source.mkdir(mode=0o700)
+    (installation_source / "scripts").mkdir()
+    shutil.copytree(source / "deploy", installation_source / "deploy")
+    (installation_source / "requirements.txt").write_text("# test\n")
+    (installation_source / "source-marker.py").write_text("# must survive in-place reinstall\n")
     config = tmp_path / "config"
     config.mkdir()
     for name in ("api.key", "admin.password", "session.secret", "tls.crt", "tls.key"):
@@ -58,9 +60,9 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     units = tmp_path / "units"
     units.mkdir()
     script = (source / "scripts" / installer).read_text().replace('/opt/netem-traffic-simulator', str(application)).replace('/etc/netem-traffic-simulator', str(config)).replace('/var/lib/netem-traffic-simulator', str(tmp_path / 'runtime')).replace('/etc/systemd/system', str(units)).replace('if [[ $EUID -ne 0 ]]; then', 'if false; then')
-    (application / "scripts" / installer).write_text(script)
+    (installation_source / "scripts" / installer).write_text(script)
     helper = (source / "scripts/configure-lxc-service.sh").read_text().replace('/etc/systemd/system', str(units))
-    (application / "scripts/configure-lxc-service.sh").write_text(helper)
+    (installation_source / "scripts/configure-lxc-service.sh").write_text(helper)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     logfile = tmp_path / "calls"
@@ -76,7 +78,8 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     path.chmod(0o755)
     environment = dict(os.environ, PATH=str(bin_dir) + ":" + os.environ["PATH"], INSTALL_LOG=str(logfile))
     for _ in range(2):
-        subprocess.run(["bash", str(application / "scripts" / installer)], env=environment, check=True, capture_output=True)
+        subprocess.run(["bash", str(installation_source / "scripts" / installer)], env=environment, check=True, capture_output=True)
+    assert application.stat().st_mode & 0o777 == 0o755
     assert (application / "source-marker.py").exists()
     assert (config / "api.key").read_text() == "preserved-api.key"
     assert (config / "tls.key").read_text() == "preserved-tls.key"
