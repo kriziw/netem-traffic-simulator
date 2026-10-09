@@ -19,8 +19,10 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$APP_DIR"
-rm -rf "$APP_DIR"/*
-cp -a "$SOURCE_DIR"/. "$APP_DIR"/
+if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
+  rm -rf "$APP_DIR"/*
+  cp -a "$SOURCE_DIR"/. "$APP_DIR"/
+fi
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
