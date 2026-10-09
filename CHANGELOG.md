@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.4.0...v0.5.0) (2026-10-09)
+
+
+### Features
+
+* discover appliance identities and prefill routing fields ([cc77155](https://github.com/kriziw/netem-traffic-simulator/commit/cc7715533b717a9f1febb73f95b65f03453d2557))
+* discover appliance identities with read-only Proxmox inventory ([b181afd](https://github.com/kriziw/netem-traffic-simulator/commit/b181afd1df79e678a8efb776b028135807ddb5d4))
+
 ## [0.4.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.3.2...v0.4.0) (2026-10-09)
 
 
