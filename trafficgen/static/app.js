@@ -140,13 +140,18 @@ window.TrafficGen = (() => {
     load();
     repeat(load,3000);
   }
+  function fillAppliance(data){
+    for(const [suffix,key] of [['interface','candidateInterface'],['gateway','candidateGateway'],['name','candidateName'],['vendor','candidateVendor'],['model','candidateModel'],['firmware','candidateFirmware']]){
+      const field=document.getElementById('appliance-'+suffix);if(field)field.value=data[key]||'';
+    }
+    const details=document.getElementById('detected-appliance-details');if(details)details.textContent=(data.candidateEvidence||'No exposed identity')+'. Gateway role requires Verify & select.';
+  }
   function systemPage(){
     let alive=true;cleanups.push(()=>alive=false);
     let previous=document.getElementById('system-job').dataset.busy==='true';
-    document.getElementById('gateway-candidates')?.addEventListener('click',event=>{
-      const button=event.target.closest('[data-candidate-interface]');if(!button)return;
-      document.getElementById('appliance-interface').value=button.dataset.candidateInterface;
-      document.getElementById('appliance-gateway').value=button.dataset.candidateGateway;
+    document.getElementById('detected-appliance')?.addEventListener('change',event=>{
+      const option=event.target.selectedOptions[0];if(!option?.value)return;
+      fillAppliance(option.dataset);
     });
     async function poll(){
       try{
@@ -158,15 +163,21 @@ window.TrafficGen = (() => {
         if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag);
         const health=document.getElementById('route-health');if(health&&state.route_health){health.textContent=state.route_health.message;health.classList.toggle('error',state.route_health.state==='error');}
         if(state.selected)document.getElementById('selected-route').textContent='Saved selection: '+state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
-        if(state.scanned_candidates?.length){
-          const body=document.getElementById('gateway-candidates');
-          body.replaceChildren(...state.scanned_candidates.map(candidate=>{
-            const tr=document.createElement('tr');for(const value of [candidate.interface,candidate.gateway,candidate.evidence]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
-            const td=document.createElement('td'),button=document.createElement('button');button.type='button';button.className='btn small';button.textContent='Use candidate';button.dataset.candidateInterface=candidate.interface;button.dataset.candidateGateway=candidate.gateway;td.append(button);tr.append(td);return tr;
-          }));
+        const select=document.getElementById('detected-appliance');
+        if(select && !select.matches(':focus')){
+          const selected=select.selectedOptions[0];
+          const key=selected?.dataset.candidateInterface+'|'+selected?.dataset.candidateGateway;
+          const options=(state.scanned_candidates||[]).map((candidate,index)=>{
+            const option=document.createElement('option');option.value=String(index);
+            for(const [name,value] of Object.entries({Interface:candidate.interface,Gateway:candidate.gateway,Name:candidate.name,Vendor:candidate.vendor,Model:candidate.model||'',Firmware:candidate.firmware||'',Evidence:candidate.identity_evidence+' · '+candidate.confidence}))option.dataset['candidate'+name]=value;
+            option.textContent=candidate.name+' · '+(candidate.vendor==='Other'?'Unknown':candidate.vendor)+' · '+candidate.gateway+' on '+candidate.interface;
+            option.selected=key===candidate.interface+'|'+candidate.gateway;return option;
+          });
+          const empty=document.createElement('option');empty.value='';empty.textContent='Select a discovered appliance…';
+          select.replaceChildren(empty,...options);
         }
       }catch(_){}
     }poll();repeat(poll,2000);
   }
-  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor};
+  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance};
 })();

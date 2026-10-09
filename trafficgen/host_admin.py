@@ -17,6 +17,8 @@ import time
 from urllib.request import Request, urlopen
 
 from .maintenance import ADMIN_DIR, read_json
+from .appliance_identity import enrich_candidates
+from .proxmox_inventory import validate_config, collect
 from .network import discover, ip_json, run, validate_route, validate_interface, interfaces
 
 APP_DIR = Path('/opt/netem-traffic-simulator')
@@ -27,13 +29,13 @@ ROUTE_PROTOCOL = '186'
 SYSTEMD_DIR = Path('/etc/systemd/system')
 
 
-def atomic_json(path, data):
+def atomic_json(path, data, mode=0o644):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.admin-')
     try:
         with os.fdopen(fd, 'w') as stream:
             json.dump(data, stream)
-        os.chmod(temporary, 0o644)
+        os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -232,6 +234,49 @@ def restore_network():
     if failures:
         raise ValueError('; '.join(failures))
 
+
+def inventory_configure(payload):
+    config = validate_config(payload, management())
+    result = collect(config)
+    config['fingerprint'] = result['fingerprint']
+    atomic_json(ADMIN_DIR / 'proxmox-secret.json', config, mode=0o600)
+    (ADMIN_DIR / 'discovery.json').unlink(missing_ok=True)
+    atomic_json(ADMIN_DIR / 'proxmox-status.json', {'connected': True, 'host': config['host'],
+        'token_id': config['token_id'], 'fingerprint': config['fingerprint'], 'vm_count': result['vm_count'], 'warnings': result['warnings']})
+    atomic_json(ADMIN_DIR / 'proxmox-inventory.json', result)
+    return {'message': f"Read-only Proxmox inventory connected: {result['vm_count']} visible VMs. Scan data LANs to match their MAC addresses."}
+
+
+def appliance_scan():
+    config = read_json(ADMIN_DIR / 'proxmox-secret.json')
+    inventory = read_json(ADMIN_DIR / 'proxmox-inventory.json', {})
+    warning = None
+    if config:
+        try:
+            # Recheck the management NIC/subnet and the pinned certificate on every scan.
+            inventory = collect(validate_config(config, management()))
+            atomic_json(ADMIN_DIR / 'proxmox-inventory.json', inventory)
+            atomic_json(ADMIN_DIR / 'proxmox-status.json', {'connected': True, 'host': config['host'],
+                'token_id': config['token_id'], 'fingerprint': config['fingerprint'], 'vm_count': inventory['vm_count'], 'warnings': inventory['warnings']})
+        except ValueError as exc:
+            warning = str(exc)
+            inventory = {}  # Do not label current devices using stale/failed inventory.
+            atomic_json(ADMIN_DIR / 'proxmox-inventory.json', {})
+            atomic_json(ADMIN_DIR / 'proxmox-status.json', {'connected': False, 'host': config['host'], 'error': warning})
+    result = discover(management(), scan=True)
+    result['candidates'] = enrich_candidates(result['candidates'], result['interfaces'], inventory, probe=True)
+    result['scanned_at'] = time.time()
+    result['message'] = f"Found {len(result['candidates'])} LAN candidates. Product hints require confirmation; verify the gateway before routing."
+    if warning: result['warning'] = warning
+    atomic_json(ADMIN_DIR / 'discovery.json', result)
+    return result
+
+
+def inventory_disconnect():
+    for name in ('proxmox-secret.json', 'proxmox-status.json', 'proxmox-inventory.json', 'discovery.json'):
+        (ADMIN_DIR / name).unlink(missing_ok=True)
+    return {'message': 'Proxmox credentials and cached identity data removed.'}
+
 def process_request():
     request_path = RUNTIME_DIR / 'admin-request.json'
     try:
@@ -265,10 +310,13 @@ def process_request():
         elif job['action'] == 'install_update':
             result = install_release(str(payload.get('tag', '')))
         elif job['action'] == 'scan':
-            result = discover(management(), scan=True)
-            atomic_json(ADMIN_DIR / 'discovery.json', result)
+            result = appliance_scan()
         elif job['action'] == 'route':
             result = apply_route(payload)
+        elif job['action'] == 'configure_inventory':
+            result = inventory_configure(payload)
+        elif job['action'] == 'disconnect_inventory':
+            result = inventory_disconnect()
         elif job['action'] == 'configure_interface':
             result = configure_interface(payload)
         elif job['action'] == 'forget_interface':

@@ -35,6 +35,8 @@ from .dem import dem_summary
 from .engine import WorkloadController
 from .profiles import profile_payload
 from . import maintenance
+from .appliance_identity import enrich_candidates
+from .proxmox_inventory import validate_config
 from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface
 
 
@@ -109,8 +111,14 @@ def create_app():
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
             state["network"] = discover(policy.get("management_interface", "eth0"))
             state["route_health"] = route_status(state.get("selected"), policy.get("management_interface", "eth0"), state["network"]["interfaces"])
+            inventory = maintenance.read_json(maintenance.ADMIN_DIR / "proxmox-inventory.json", {})
+            state["network"]["candidates"] = enrich_candidates(state["network"]["candidates"], state["network"]["interfaces"], inventory)
             scanned = maintenance.read_json(maintenance.ADMIN_DIR / "discovery.json", {})
-            state["scanned_candidates"] = scanned.get("candidates", [])
+            cached = {(r.get("interface"), r.get("gateway"), r.get("mac")): r for r in scanned.get("candidates", [])}
+            state["network"]["candidates"] = [{**r, **cached.get((r["interface"], r["gateway"], r.get("mac")), {})} for r in state["network"]["candidates"]]
+            state["scanned_candidates"] = state["network"]["candidates"]
+            state["discovery_warning"] = scanned.get("warning")
+            state["scanned_at"] = scanned.get("scanned_at")
         except (OSError, ValueError) as exc:
             state["network"] = {"interfaces": [], "candidates": [], "error": str(exc)}
             state["route_health"] = {"state": "error", "active": False, "message": "Cannot inspect live network state: " + str(exc)}
@@ -143,7 +151,7 @@ def create_app():
                 rows = saved_appliances()
                 if len(rows) >= 20:
                     raise ValueError("Up to 20 appliances can be saved.")
-                rows.append({**route, "name": name, "vendor": vendor, "id": secrets.token_hex(8)})
+                rows.append({**route, "name": name, "vendor": vendor, "model": request.form.get("model", "")[:80], "firmware": request.form.get("firmware", "")[:40], "id": secrets.token_hex(8)})
                 _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
                 flash("Appliance saved. Select it below to verify and apply its traffic route.", "success")
             elif action == "delete_appliance":
@@ -156,6 +164,9 @@ def create_app():
                     payload = next((row for row in saved_appliances() if row["id"] == request.form.get("appliance_id")), None)
                     if payload is None:
                         raise ValueError("Choose a saved appliance.")
+                elif action == "configure_inventory":
+                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                    payload = validate_config(dict(request.form), policy.get("management_interface", "eth0"))
                 elif action == "configure_interface":
                     policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
                     payload = validate_interface(dict(request.form), policy.get("management_interface", "eth0"))

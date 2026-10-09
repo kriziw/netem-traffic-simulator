@@ -35,3 +35,14 @@ test('controls post to the action attribute when a named input shadows form.acti
   assert.equal(sent.options.method,'POST');
   assert.equal(sent.options.body.form,form);
 });
+
+test('selecting an appliance prefills identity and routing fields while preserving the target',()=>{
+  const fields={};for(const id of ['interface','gateway','name','vendor','model','firmware'])fields['appliance-'+id]={value:''};
+  fields['appliance-target']={value:'198.18.0.1'};fields['detected-appliance-details']={textContent:''};
+  const ctx={window:{},document:{addEventListener(){},getElementById:id=>fields[id]}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  ctx.window.TrafficGen.fillAppliance({candidateInterface:'eth1',candidateGateway:'10.250.10.1',candidateName:'FortiGate',candidateVendor:'Fortinet',candidateModel:'FortiGate-VM64',candidateFirmware:'7.6.7',candidateEvidence:'Proxmox · inventory label'});
+  assert.equal(fields['appliance-interface'].value,'eth1');assert.equal(fields['appliance-name'].value,'FortiGate');
+  assert.equal(fields['appliance-vendor'].value,'Fortinet');assert.equal(fields['appliance-model'].value,'FortiGate-VM64');
+  assert.equal(fields['appliance-firmware'].value,'7.6.7');assert.equal(fields['appliance-target'].value,'198.18.0.1');
+});
