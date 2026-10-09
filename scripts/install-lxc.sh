@@ -14,19 +14,21 @@ fi
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip openssl ca-certificates
+apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$RUNTIME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
 mkdir -p "$APP_DIR" "$CONFIG_DIR" "$RUNTIME_DIR"
-rm -rf "$APP_DIR"/*
-cp -a "$SOURCE_DIR"/. "$APP_DIR"/
+systemctl stop netem-traffic-simulator 2>/dev/null || true
+if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
+  rsync -a --delete --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache "$SOURCE_DIR"/ "$APP_DIR"/
+fi
 
 python3 -m venv "$APP_DIR/.venv"
-"$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
+"$APP_DIR/.venv/bin/pip" check
 
 chown -R root:root "$APP_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_DIR" "$CONFIG_DIR"
@@ -46,9 +48,9 @@ fi
 chmod 0600 "$CONFIG_DIR/api.key" "$CONFIG_DIR/admin.password" "$CONFIG_DIR/session.secret"
 chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/api.key" "$CONFIG_DIR/admin.password" "$CONFIG_DIR/session.secret"
 
+HOSTNAME_FQDN="$(hostname -f 2>/dev/null || hostname)"
+PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 if [[ ! -s "$CONFIG_DIR/tls.crt" || ! -s "$CONFIG_DIR/tls.key" ]]; then
-  HOSTNAME_FQDN="$(hostname -f 2>/dev/null || hostname)"
-  PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   SAN="DNS:${HOSTNAME_FQDN}"
   if [[ -n "${PRIMARY_IP}" ]]; then SAN="${SAN},IP:${PRIMARY_IP}"; fi
   openssl req -x509 -newkey rsa:3072 -nodes -days 825 \
@@ -62,8 +64,11 @@ if [[ ! -s "$CONFIG_DIR/tls.crt" || ! -s "$CONFIG_DIR/tls.key" ]]; then
 fi
 
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-simulator.service" /etc/systemd/system/netem-traffic-simulator.service
+bash "$APP_DIR/scripts/configure-lxc-service.sh" netem-traffic-simulator
 systemctl daemon-reload
-systemctl enable --now netem-traffic-simulator
+systemctl enable netem-traffic-simulator
+systemctl restart netem-traffic-simulator
+systemctl is-active --quiet netem-traffic-simulator
 
 echo
 echo "NetEm Traffic Simulator installed."

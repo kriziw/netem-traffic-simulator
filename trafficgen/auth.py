@@ -14,7 +14,7 @@ def bearer_required(view):
         auth = request.headers.get("Authorization", "")
         supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         expected = ensure_api_key(current_app.config["TRAFFICGEN_SETTINGS"])
-        if not supplied or not hmac.compare_digest(supplied, expected):
+        if not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
             return {"error": "Unauthorized"}, 401
         return view(*args, **kwargs)
 
@@ -33,4 +33,4 @@ def admin_required(view):
 
 def admin_password_valid(candidate: str) -> bool:
     expected = ensure_admin_password(current_app.config["TRAFFICGEN_SETTINGS"])
-    return bool(candidate) and hmac.compare_digest(candidate, expected)
+    return bool(candidate) and hmac.compare_digest(candidate.encode(), expected.encode())

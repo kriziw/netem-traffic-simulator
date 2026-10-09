@@ -5,7 +5,8 @@
       "package-name": "netem-traffic-simulator",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "version.txt"
+        "version.txt",
+        "trafficgen/version.txt"
       ]
     }
   }

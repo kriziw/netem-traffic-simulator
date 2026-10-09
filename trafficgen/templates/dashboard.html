@@ -56,7 +56,7 @@
       </div>
       <div class="actions space-top">
         <a class="btn" href="{{ url_for('workloads') }}">Adjust</a>
-        <form method="post" action="{{ url_for('workload_stop_ui') }}"><button class="btn danger" type="submit">Stop workload</button></form>
+        <form method="post" action="{{ url_for('workload_stop_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn danger" type="submit">Stop workload</button></form>
       </div>
       {% else %}
       <div class="empty">No workload is running. Start a profile from Workloads.</div>

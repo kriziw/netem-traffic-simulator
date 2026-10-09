@@ -21,7 +21,7 @@
         <button class="btn" id="copy-key" type="button">Copy</button>
       </div>
       <div class="warning">Treat this value like a password. Anyone with it can start, adjust and stop workloads and read DEM data.</div>
-      <form method="post" action="{{ url_for('api_rotate') }}" onsubmit="return confirm('Rotate the API key? Existing NetEm integrations will stop working immediately.');">
+      <form method="post" action="{{ url_for('api_rotate') }}" onsubmit="return confirm('Rotate the API key? Existing NetEm integrations will stop working immediately.');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="btn danger" type="submit">Rotate API key</button>
       </form>
     </div>

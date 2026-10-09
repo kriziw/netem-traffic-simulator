@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import sqlite3
 import time
 from pathlib import Path
 
 
+@contextmanager
 def connect(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=5, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db(path: Path):
@@ -51,8 +57,6 @@ def init_db(path: Path):
                 ON transactions(timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_run
                 ON transactions(run_id, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_transactions_endpoint
-                ON transactions(endpoint_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_app
                 ON transactions(application, timestamp);
             CREATE INDEX IF NOT EXISTS idx_transactions_persona
@@ -65,25 +69,40 @@ def init_db(path: Path):
                 users INTEGER NOT NULL,
                 requests_per_second REAL NOT NULL,
                 failures_per_second REAL NOT NULL,
-                availability_pct REAL NOT NULL,
+                availability_pct REAL,
                 p50_ms REAL,
                 p95_ms REAL,
-                experience_score REAL NOT NULL
+                experience_score REAL
             );
             CREATE INDEX IF NOT EXISTS idx_dem_time
                 ON dem_samples(timestamp);
             """
         )
+        sample_columns = list(conn.execute("PRAGMA table_info(dem_samples)"))
+        if any(row["name"] in ("availability_pct", "experience_score") and row["notnull"]
+               for row in sample_columns):
+            conn.executescript("""
+                ALTER TABLE dem_samples RENAME TO old_dem_samples;
+                CREATE TABLE dem_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL,
+                    run_id TEXT, users INTEGER NOT NULL, requests_per_second REAL NOT NULL,
+                    failures_per_second REAL NOT NULL, availability_pct REAL,
+                    p50_ms REAL, p95_ms REAL, experience_score REAL
+                );
+                INSERT INTO dem_samples SELECT * FROM old_dem_samples;
+                DROP TABLE old_dem_samples;
+                CREATE INDEX idx_dem_time ON dem_samples(timestamp);
+            """)
         columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
         }
         if "endpoint_id" not in columns:
             conn.execute("ALTER TABLE transactions ADD COLUMN endpoint_id TEXT")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
-                "ON transactions(endpoint_id, timestamp)"
-            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
+            "ON transactions(endpoint_id, timestamp)"
+        )
 
 
 def create_run(path: Path, run: dict):
@@ -119,28 +138,22 @@ def finish_run(path: Path, run_id: str, status: str = "stopped"):
 
 
 def record_transaction(path: Path, item: dict):
+    record_transactions(path, [item])
+
+
+def record_transactions(path: Path, items: list[dict]):
+    values = [(
+        item.get("timestamp", time.time()), item.get("run_id"), item.get("endpoint_id"),
+        item.get("persona"), item.get("application"), item.get("request_type", "HTTP"),
+        item.get("name", "request"), 1 if item.get("success") else 0,
+        item.get("response_time_ms"), int(item.get("response_length") or 0), item.get("error"),
+    ) for item in items]
     with connect(path) as conn:
-        conn.execute(
-            """
-            INSERT INTO transactions (
-                timestamp, run_id, endpoint_id, persona, application, request_type, name,
-                success, response_time_ms, response_length, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item.get("timestamp", time.time()),
-                item.get("run_id"),
-                item.get("endpoint_id"),
-                item.get("persona"),
-                item.get("application"),
-                item.get("request_type", "HTTP"),
-                item.get("name", "request"),
-                1 if item.get("success") else 0,
-                item.get("response_time_ms"),
-                int(item.get("response_length") or 0),
-                item.get("error"),
-            ),
-        )
+        conn.executemany("""
+            INSERT INTO transactions (timestamp, run_id, endpoint_id, persona,
+                application, request_type, name, success, response_time_ms, response_length, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, values)
 
 
 def record_dem_sample(path: Path, sample: dict):
@@ -170,13 +183,13 @@ def query_dem_timeseries(path: Path, since: float, limit: int = 2000):
     with connect(path) as conn:
         rows = conn.execute(
             """
-            SELECT timestamp, run_id, users, requests_per_second,
+            SELECT * FROM (SELECT timestamp, run_id, users, requests_per_second,
                    failures_per_second, availability_pct, p50_ms, p95_ms,
                    experience_score
             FROM dem_samples
             WHERE timestamp >= ?
-            ORDER BY timestamp ASC
-            LIMIT ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?) ORDER BY timestamp ASC
             """,
             (since, max(1, min(5000, int(limit)))),
         ).fetchall()
@@ -193,12 +206,12 @@ def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000
     with connect(path) as conn:
         rows = conn.execute(
             f"""
-            SELECT timestamp, run_id, endpoint_id, persona, application, request_type, name,
+            SELECT * FROM (SELECT timestamp, run_id, endpoint_id, persona, application, request_type, name,
                    success, response_time_ms, response_length, error
             FROM transactions
             WHERE {' AND '.join(clauses)}
-            ORDER BY timestamp ASC
-            LIMIT ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?) ORDER BY timestamp ASC
             """,
             values,
         ).fetchall()
@@ -223,3 +236,26 @@ def recent_runs(path: Path, limit: int = 20):
         item["applications"] = json.loads(item.pop("applications_json"))
         result.append(item)
     return result
+
+
+def recover_runs(path: Path):
+    with connect(path) as conn:
+        conn.execute("UPDATE runs SET status = 'interrupted', ended_at = ? "
+                     "WHERE ended_at IS NULL", (time.time(),))
+
+
+def prune_history(path: Path, retention_days: int = 7):
+    cutoff = time.time() - retention_days * 86400
+    with connect(path) as conn:
+        conn.execute("DELETE FROM transactions WHERE timestamp < ?", (cutoff,))
+        conn.execute("DELETE FROM dem_samples WHERE timestamp < ?", (cutoff,))
+        conn.execute("DELETE FROM runs WHERE ended_at < ?", (cutoff,))
+
+
+def update_run(path: Path, run: dict):
+    with connect(path) as conn:
+        conn.execute("UPDATE runs SET target_users=?, spawn_rate=?, activity=?, "
+                     "personas_json=?, applications_json=?, status=? WHERE run_id=?",
+                     (run["target_users"], run["spawn_rate"], run["activity"],
+                      json.dumps(run["personas"]), json.dumps(run["applications"]),
+                      run["status"], run["run_id"]))

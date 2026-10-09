@@ -15,7 +15,7 @@ The simulator uses [Locust](https://github.com/locustio/locust) as the proven wo
 - a modern standalone management UI;
 - a controlled upstream traffic target for the lab.
 
-Current version: **0.1.0**
+Current version: **0.2.0**
 
 ## Why this exists
 
@@ -116,7 +116,7 @@ Current application classes:
 - Backup
 - DNS-like application transactions
 
-Voice and video use controlled UDP media bursts. Other application classes use HTTP transactions against the controlled target service.
+Voice and video use paced UDP media bursts with nonce/sequence acknowledgements from the controlled target. Delivery failures affect availability; media latency is measured round-trip time, excluding intentional pacing. Upgrade the simulator and controlled target together. Other application classes use HTTP transactions against the controlled target service.
 
 These are traffic-behaviour models, not claims to reproduce proprietary application protocols exactly.
 
@@ -254,7 +254,7 @@ The installer generates a local self-signed certificate and exposes the manageme
 
     https://<traffic-generator>:8443
 
-For lab deployments NetEm can explicitly allow the discovered self-signed certificate. The discovery payload also includes its SHA-256 fingerprint so pinning/trust-on-first-use can be added cleanly.
+NetEm can explicitly allow the self-signed lab certificate. The fixed integration checks its SHA-256 fingerprint before sending the API key. Discovery supplies a candidate fingerprint; verify it against the simulator certificate. Manual entry with a blank fingerprint pins the first certificate seen. Later changes require verifying and updating the trusted fingerprint.
 
 ## Controlled traffic target
 
@@ -303,7 +303,9 @@ The installer:
 - generates a TLS certificate;
 - installs and starts the systemd service.
 
-At the end it prints the administrator password and API key.
+At the end it prints the administrator password and API key. Re-running the installer preserves secrets, certificates and runtime history and restarts the service with the updated code. It can be run from the installed `/opt/netem-traffic-simulator` checkout without deleting its source.
+
+On an LXC, the installer creates a service drop-in that disables mount-namespace hardening unsupported by common unprivileged Proxmox containers. The dedicated account, file permissions and `NoNewPrivileges` remain in effect. VMs retain full hardening. Environment overrides may be added through a separate systemd drop-in (`Environment=TRAFFICGEN_BIND_HOST=<management-IP>`, for example).
 
 Check:
 
@@ -330,6 +332,13 @@ Test:
 The installer creates the benchmark address automatically. Configure the simulator target as:
 
     http://198.18.0.1:8090
+
+Before running a workload:
+
+1. On the simulator, confirm `ip route get 198.18.0.1` selects the corporate LAN NIC and the FortiGate gateway. Keep the management subnet directly connected, with no management default route.
+2. Ensure the FortiGate routes `198.18.0.1` through its SD-WAN zone and allows LAN-to-SD-WAN HTTP/TCP 8090 and UDP 9000 traffic. Apply SNAT to the WAN address, or provide explicit return routes to the simulator LAN on the upstream router.
+3. Ensure both WAN paths reach the upstream router that owns `198.18.0.1/32`. A separate target host needs upstream routes to that address; the loopback alone does not advertise a route.
+4. Test `curl --connect-timeout 5 http://198.18.0.1:8090/health` **from the simulator**, then verify the HTTP/UDP workload increments the intended WAN counters. A management-side curl verifies service health only.
 
 Using a dedicated 198.18.0.0/15 RFC 2544 benchmarking address is important: do not point the workload at the ISP Router's 192.168.0.x management address, because a dual-homed simulator on the same management subnet could bypass the FortiGate/NetEm datapath.
 
@@ -381,6 +390,8 @@ Default runtime database:
 
     /var/lib/netem-traffic-simulator/traffic-generator.db
 
+Raw transaction and DEM history is retained for seven days and pruned hourly during workloads. The database reuses freed pages. Live DEM returns the newest 50,000 transactions within its window and marks capped summaries with `truncated: true`; NetEm will not pass a DEM assertion on a truncated window. Rates use the complete requested window. No-data samples retain null availability/score values. Status also exposes persistence errors and dropped transaction counts.
+
 It stores:
 
 - workload runs;
@@ -402,7 +413,7 @@ This is a lab traffic generator, but the control plane is treated as privileged:
 - immediate API-key rotation;
 - no secret in discovery;
 - API key stored outside Git;
-- systemd hardening;
+- systemd hardening on VMs; LXC-specific namespace overrides where required;
 - bounded workload configuration;
 - controlled default target.
 
@@ -419,7 +430,7 @@ Install:
 
 Run tests:
 
-    pytest -q
+    python -m gevent.monkey --module pytest -q
 
 Compile:
 
@@ -436,7 +447,7 @@ Version state is held in:
 - `release-please-config.json`
 - `CHANGELOG.md`
 
-Conventional commits such as `feat:` and `fix:` are used to drive semantic release PRs.
+Conventional commits and squash-merge titles such as `feat:` and `fix:` drive semantic release PRs. Optionally configure `RELEASE_PLEASE_TOKEN` with repository contents, pull request and issue permissions so generated release PRs trigger CI; the default GitHub token can create releases but does not trigger follow-on workflows. Release Please owns version/changelog updates, including the packaged `trafficgen/version.txt`.
 
 ## License
 

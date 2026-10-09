@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from gevent import monkey, signal_handler
+
+monkey.patch_all()
+
 import argparse
+import signal
+from gevent.pywsgi import WSGIServer
 import json
 import socket
 import threading
 from flask import Flask, Response, jsonify, request
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
 
 def bounded_size(raw, minimum=1, maximum=8192):
@@ -66,8 +73,8 @@ def file_download():
 
 @app.post("/files/upload")
 def file_upload():
-    length = min(int(request.content_length or 0), 16 * 1024 * 1024)
-    request.stream.read(length)
+    request.max_content_length = 16 * 1024 * 1024
+    length = len(request.get_data(cache=False))
     return jsonify({"accepted_bytes": length})
 
 
@@ -90,8 +97,7 @@ def updates_package():
 
 @app.post("/backup/upload")
 def backup_upload():
-    length = min(int(request.content_length or 0), 32 * 1024 * 1024)
-    request.stream.read(length)
+    length = len(request.get_data(cache=False))
     return jsonify({"stored_bytes": length})
 
 
@@ -100,13 +106,25 @@ def dns_query():
     return jsonify({"name": request.args.get("name", "corp.example"), "address": "198.51.100.42"})
 
 
-def udp_sink(host: str, port: int, stop_event: threading.Event):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((host, port))
-    sock.settimeout(1.0)
+def udp_socket(host: str, port: int):
+    family, kind, protocol, _, address = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
+    sock = socket.socket(family, kind, protocol)
+    try:
+        sock.bind(address)
+        sock.settimeout(1.0)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def udp_sink(host: str, port: int, stop_event: threading.Event, sock=None):
+    sock = sock if sock is not None else udp_socket(host, port)
     while not stop_event.is_set():
         try:
-            sock.recvfrom(65535)
+            data, peer = sock.recvfrom(65535)
+            if len(data) >= 12:
+                sock.sendto(data[:12], peer)
         except socket.timeout:
             continue
         except OSError:
@@ -122,16 +140,26 @@ def main():
     args = parser.parse_args()
 
     stop = threading.Event()
+    # Binding in the main thread makes a port conflict fail service startup.
+    media_socket = udp_socket(args.host, args.udp_port)
     thread = threading.Thread(
         target=udp_sink,
-        args=(args.host, args.udp_port, stop),
+        args=(args.host, args.udp_port, stop, media_socket),
         daemon=True,
     )
     thread.start()
+    server = WSGIServer((args.host, args.port), app, log=None)
+
+    def shutdown(*_args):
+        stop.set()
+        server.stop(timeout=2)
+
+    handlers = [signal_handler(signal.SIGTERM, shutdown), signal_handler(signal.SIGINT, shutdown)]
     try:
-        app.run(host=args.host, port=args.port, threaded=True)
+        server.serve_forever()
     finally:
         stop.set()
+        thread.join(timeout=2)
 
 
 if __name__ == "__main__":
