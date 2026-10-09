@@ -57,6 +57,7 @@ class CorporateUser(HttpUser):
 
     def on_start(self):
         cfg = self.runtime_config
+        self.endpoint_id = "ep-" + uuid.uuid4().hex[:10]
         self.persona = weighted_choice(cfg["personas"])
         self.app_weights = combined_application_weights(
             self.persona, cfg["applications"]
@@ -73,6 +74,7 @@ class CorporateUser(HttpUser):
     def _context(self, application):
         return {
             "run_id": self.runtime_config["run_id"],
+            "endpoint_id": self.endpoint_id,
             "persona": self.persona,
             "application": application,
         }
@@ -276,6 +278,7 @@ class WorkloadController:
         item = {
             "timestamp": time.time(),
             "run_id": ctx.get("run_id"),
+            "endpoint_id": ctx.get("endpoint_id"),
             "persona": ctx.get("persona"),
             "application": ctx.get("application"),
             "request_type": request_type,
