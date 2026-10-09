@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/kriziw/netem-traffic-simulator/compare/netem-traffic-simulator-v0.2.0...netem-traffic-simulator-v0.2.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* harden deployment, workload control and DEM accuracy ([5648aee](https://github.com/kriziw/netem-traffic-simulator/commit/5648aee8b472ecd8338925de1c07d7257c03986f))
+* harden deployment, workload control and DEM accuracy ([5ba8890](https://github.com/kriziw/netem-traffic-simulator/commit/5ba8890e1d55f2708115e320234e6891455db8fa))
+
 ## [0.2.0](https://github.com/kriziw/netem-traffic-simulator/compare/netem-traffic-simulator-v0.1.0...netem-traffic-simulator-v0.2.0) (2026-10-09)
 
 
