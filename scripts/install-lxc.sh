@@ -31,6 +31,9 @@ python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" check
 
 chown -R root:root "$APP_DIR"
+# rsync -a also copies the source directory mode (mktemp sources are 0700).
+# The unprivileged service must be able to enter its working directory.
+chmod 0755 "$APP_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_DIR" "$CONFIG_DIR"
 chmod 0750 "$CONFIG_DIR" "$RUNTIME_DIR"
 

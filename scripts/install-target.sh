@@ -27,6 +27,9 @@ python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 "$APP_DIR/.venv/bin/pip" check
 chown -R root:root "$APP_DIR"
+# rsync -a also copies the source directory mode (mktemp sources are 0700).
+# The unprivileged service must be able to enter its working directory.
+chmod 0755 "$APP_DIR"
 
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target-address.service" /etc/systemd/system/netem-traffic-target-address.service
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target.service" /etc/systemd/system/netem-traffic-target.service
