@@ -236,19 +236,22 @@ def egress_breakdown(rows):
     result = {}
     for address, items in sorted(groups.items()):
         summary = summarize_rows(items)
-        apps = defaultdict(lambda: [0, 0])
+        apps = defaultdict(lambda: [0, 0, []])
         for row in items:
             counts = apps[row.get("application") or "other"]
             counts[0] += 1
             counts[1] += 0 if row["success"] else 1
+            if row["success"] and row.get("response_time_ms") is not None:
+                counts[2].append(row["response_time_ms"])
         result[address] = {
             **{key: summary[key] for key in ("requests", "successes", "failures", "availability_pct",
                                              "p95_ms", "experience_score", "experience")},
             "causes": dict(Counter(row_cause(row) for row in items if not row["success"]).most_common()),
             "applications": {
                 app: {"requests": total, "failures": failed,
-                      "availability_pct": round((total - failed) * 100.0 / total, 3)}
-                for app, (total, failed) in sorted(apps.items())
+                      "availability_pct": round((total - failed) * 100.0 / total, 3),
+                      "p95_ms": _round(percentile(times, 0.95))}
+                for app, (total, failed, times) in sorted(apps.items())
             },
         }
     return result

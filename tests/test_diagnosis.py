@@ -132,6 +132,7 @@ def test_slow_wait_and_http_errors_explain_interactive_symptoms():
     assert {"slow_wait", "http_errors", "timeouts"} <= set(ids)
     assert next(item for item in result["findings"] if item["id"] == "http_errors")["status_codes"] == {"403": 2}
     assert result["egress"]["unknown"]["causes"] == {"connect_timeout": 1}
+    assert result["egress"]["198.18.1.2"]["applications"]["web_saas"]["p95_ms"] == 900.0
     assert result["causes"] == {"http_status": 2, "connect_timeout": 1}
 
 
