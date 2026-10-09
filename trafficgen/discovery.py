@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
+import ssl
 import threading
-from dataclasses import asdict
 
 from . import __version__
 
@@ -32,6 +33,15 @@ def management_addresses():
     return sorted(addresses)
 
 
+def certificate_fingerprint(path):
+    try:
+        pem = path.read_text()
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        return hashlib.sha256(der).hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
 def discovery_payload(settings):
     return {
         "service": "netem-traffic-simulator",
@@ -42,6 +52,7 @@ def discovery_payload(settings):
         "hostname": socket.gethostname(),
         "scheme": "https",
         "api_port": settings.api_port,
+        "tls_sha256": certificate_fingerprint(settings.tls_cert),
         "management_addresses": management_addresses(),
         "capabilities": [
             "corporate-workloads",
