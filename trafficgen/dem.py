@@ -101,7 +101,10 @@ def summarize_rows(rows, application=None):
     }
 
 
-def dem_summary(database_path, run_id=None, window_seconds=60):
+def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="strict", diagnosis=True):
+    # Imported here: diagnosis builds on this module's summaries.
+    from .diagnosis import application_detail, diagnose
+
     now = time.time()
     window_seconds = max(10, min(3600, int(window_seconds)))
     since = now - window_seconds
@@ -124,6 +127,9 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         key: summarize_rows(items, application=key)
         for key, items in sorted(by_app.items())
     }
+    if diagnosis:
+        for key, items in by_app.items():
+            app_summary[key].update(application_detail(key, items))
     persona_summary = {
         key: summarize_rows(items)
         for key, items in sorted(by_persona.items())
@@ -145,7 +151,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         rps = 0.0
         failures_per_second = 0.0
 
-    return {
+    result = {
         "truncated": len(rows) >= 50000,
         "timestamp": now,
         "window_seconds": window_seconds,
@@ -156,3 +162,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         "personas": persona_summary,
         "endpoints": endpoint_summary,
     }
+    if diagnosis:
+        result["diagnosis"] = diagnose(rows, app_summary, media_mode)
+        result["interactive_p95_ms"] = result["diagnosis"]["interactive_p95_ms"]
+    return result

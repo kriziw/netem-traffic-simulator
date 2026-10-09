@@ -4,54 +4,63 @@ import math
 
 APPLICATIONS = {
     "web_saas": {
+        "class": "interactive",
         "label": "Web / SaaS",
         "description": "Interactive HTTPS page/API transactions and small objects.",
         "latency_good_ms": 300,
         "latency_poor_ms": 1200,
     },
     "collaboration": {
+        "class": "interactive",
         "label": "Collaboration",
         "description": "Chat/presence polling and small bidirectional transactions.",
         "latency_good_ms": 250,
         "latency_poor_ms": 900,
     },
     "voice": {
+        "class": "realtime",
         "label": "Voice",
         "description": "Low-bandwidth UDP conversational media bursts.",
         "latency_good_ms": 180,
         "latency_poor_ms": 500,
     },
     "video": {
+        "class": "realtime",
         "label": "Video meeting",
         "description": "Variable-rate UDP video/media bursts.",
         "latency_good_ms": 250,
         "latency_poor_ms": 800,
     },
     "file_sync": {
+        "class": "bulk",
         "label": "Cloud file sync",
         "description": "Bursty uploads and downloads of medium-sized objects.",
         "latency_good_ms": 800,
         "latency_poor_ms": 3000,
     },
     "developer": {
+        "class": "bulk",
         "label": "Developer / packages",
         "description": "API, package and artifact-style HTTPS transfers.",
         "latency_good_ms": 700,
         "latency_poor_ms": 2500,
     },
     "updates": {
+        "class": "bulk",
         "label": "Software updates",
         "description": "Intermittent large downloads.",
         "latency_good_ms": 1200,
         "latency_poor_ms": 5000,
     },
     "backup": {
+        "class": "bulk",
         "label": "Backup",
         "description": "Sustained upload-oriented background transfers.",
         "latency_good_ms": 1500,
         "latency_poor_ms": 6000,
     },
     "dns": {
+        "class": "interactive",
         "label": "DNS",
         "description": "Small DNS-like application transactions through the target service.",
         "latency_good_ms": 120,
@@ -115,6 +124,20 @@ PERSONAS = {
             "web_saas": 14,
             "file_sync": 12,
         },
+    },
+}
+
+MEDIA_MODES = {
+    "strict": {
+        "label": "Strict",
+        "description": "Any lost packet fails a voice or video burst.",
+        "tolerance_pct": {"voice": 0.0, "video": 0.0},
+    },
+    "realistic": {
+        "label": "Realistic",
+        "description": "Small random loss that codecs usually conceal is accepted: voice up to 2% "
+                       "(1 of 50 packets) and video up to 1% (2 of 200 packets) per burst.",
+        "tolerance_pct": {"voice": 2.0, "video": 1.0},
     },
 }
 
@@ -318,4 +341,5 @@ def profile_payload():
         "applications": APPLICATIONS,
         "activity_levels": ACTIVITY,
         "patterns": PATTERNS,
+        "media_modes": MEDIA_MODES,
     }

@@ -7,6 +7,18 @@ import time
 from pathlib import Path
 
 
+# Diagnosis columns added after the first release; created by migration so new and
+# upgraded databases share one definition.
+DIAGNOSIS_COLUMNS = (
+    ("cause", "TEXT"), ("wait_ms", "REAL"), ("transfer_ms", "REAL"), ("bytes_up", "INTEGER"),
+    ("status_code", "INTEGER"), ("packets_sent", "INTEGER"), ("packets_lost", "INTEGER"), ("egress", "TEXT"),
+)
+TRANSACTION_FIELDS = (
+    "timestamp", "run_id", "endpoint_id", "persona", "application", "request_type", "name",
+    "success", "response_time_ms", "response_length", "error", *(name for name, _ in DIAGNOSIS_COLUMNS),
+)
+
+
 @contextmanager
 def connect(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +111,12 @@ def init_db(path: Path):
         }
         if "endpoint_id" not in columns:
             conn.execute("ALTER TABLE transactions ADD COLUMN endpoint_id TEXT")
+        for name, kind in DIAGNOSIS_COLUMNS:
+            if name not in columns:
+                conn.execute(f"ALTER TABLE transactions ADD COLUMN {name} {kind}")
+        run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "media_mode" not in run_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'strict'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
             "ON transactions(endpoint_id, timestamp)"
@@ -111,8 +129,8 @@ def create_run(path: Path, run: dict):
             """
             INSERT INTO runs (
                 run_id, started_at, ended_at, status, profile, target,
-                target_users, spawn_rate, activity, personas_json, applications_json
-            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_users, spawn_rate, activity, personas_json, applications_json, media_mode
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run["run_id"],
@@ -125,6 +143,7 @@ def create_run(path: Path, run: dict):
                 run["activity"],
                 json.dumps(run["personas"], sort_keys=True),
                 json.dumps(run["applications"], sort_keys=True),
+                run.get("media_mode", "strict"),
             ),
         )
 
@@ -147,12 +166,12 @@ def record_transactions(path: Path, items: list[dict]):
         item.get("persona"), item.get("application"), item.get("request_type", "HTTP"),
         item.get("name", "request"), 1 if item.get("success") else 0,
         item.get("response_time_ms"), int(item.get("response_length") or 0), item.get("error"),
+        *(item.get(name) for name, _ in DIAGNOSIS_COLUMNS),
     ) for item in items]
     with connect(path) as conn:
-        conn.executemany("""
-            INSERT INTO transactions (timestamp, run_id, endpoint_id, persona,
-                application, request_type, name, success, response_time_ms, response_length, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        conn.executemany(f"""
+            INSERT INTO transactions ({', '.join(TRANSACTION_FIELDS)})
+            VALUES ({', '.join('?' for _ in TRANSACTION_FIELDS)})
         """, values)
 
 
@@ -206,8 +225,7 @@ def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000
     with connect(path) as conn:
         rows = conn.execute(
             f"""
-            SELECT * FROM (SELECT timestamp, run_id, endpoint_id, persona, application, request_type, name,
-                   success, response_time_ms, response_length, error
+            SELECT * FROM (SELECT {', '.join(TRANSACTION_FIELDS)}
             FROM transactions
             WHERE {' AND '.join(clauses)}
             ORDER BY timestamp DESC, id DESC
@@ -255,7 +273,7 @@ def prune_history(path: Path, retention_days: int = 7):
 def update_run(path: Path, run: dict):
     with connect(path) as conn:
         conn.execute("UPDATE runs SET target_users=?, spawn_rate=?, activity=?, "
-                     "personas_json=?, applications_json=?, status=? WHERE run_id=?",
+                     "personas_json=?, applications_json=?, media_mode=?, status=? WHERE run_id=?",
                      (run["target_users"], run["spawn_rate"], run["activity"],
                       json.dumps(run["personas"]), json.dumps(run["applications"]),
-                      run["status"], run["run_id"]))
+                      run.get("media_mode", "strict"), run["status"], run["run_id"]))

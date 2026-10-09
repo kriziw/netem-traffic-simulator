@@ -118,6 +118,8 @@ Current application classes:
 
 Voice and video use paced UDP media bursts with nonce/sequence acknowledgements from the controlled target. Delivery failures affect availability; media latency is measured round-trip time, excluding intentional pacing. Upgrade the simulator and controlled target together. Other application classes use HTTP transactions against the controlled target service.
 
+The DEM page explains degraded experience live. It classifies each failure (timeouts, resets, HTTP errors, media loss, no media reply) and splits HTTP time into waiting for the response and transferring it. It also groups experience by the appliance address the target observed, which identifies the WAN that carried each transaction. Choose **Strict** or **Realistic** voice/video judging per workload: strict fails a burst on any lost packet, while realistic accepts the small random loss codecs usually conceal (voice up to 2%, video up to 1% per burst). Per-WAN attribution needs the appliance to SNAT to its WAN addresses, as described under deployment.
+
 These are traffic-behaviour models, not claims to reproduce proprietary application protocols exactly.
 
 ## Workload profiles

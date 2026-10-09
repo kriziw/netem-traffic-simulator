@@ -16,7 +16,10 @@ from urllib.parse import urlsplit
 import gevent
 from locust import HttpUser, task
 from locust.env import Environment
+# After locust: importing it monkey-patches ssl, which must not be loaded yet.
+import requests
 
+from . import __version__
 from .database import (
     create_run,
     finish_run,
@@ -27,14 +30,17 @@ from .database import (
     update_run,
 )
 from .dem import dem_summary
+from .diagnosis import MediaFailure, classify_failure, response_details, target_finding
 from .profiles import (
     ACTIVITY,
     APPLICATIONS,
+    MEDIA_MODES,
     PATTERNS,
     PERSONAS,
     WORKLOAD_PROFILES,
     normalized_mix,
 )
+from .wire import ADDRESS_REQUEST, ECHO_HEADER_BYTES, unpack_address
 
 
 def weighted_choice(weights: dict) -> str:
@@ -94,6 +100,12 @@ def target_host_is_lab_safe(hostname: str) -> bool:
             continue
         return False
     return True
+
+
+def validated_media_mode(value) -> str:
+    if not isinstance(value, str) or value not in MEDIA_MODES:
+        raise ValueError("Unknown media mode; use " + " or ".join(MEDIA_MODES) + ".")
+    return value
 
 
 class CorporateUser(HttpUser):
@@ -246,6 +258,7 @@ class CorporateUser(HttpUser):
         nonce = uuid.uuid4().bytes[:8]
         sent_times = {}
         received = {}
+        observed = {}
         sock = None
         receiver = None
         receive_errors = []
@@ -265,24 +278,31 @@ class CorporateUser(HttpUser):
                     except OSError as exc:
                         receive_errors.append(exc)
                         return
-                    if len(data) == 12 and data[:8] == nonce:
-                        sequence = struct.unpack("!I", data[8:])[0]
+                    if len(data) >= ECHO_HEADER_BYTES and data[:8] == nonce:
+                        sequence = struct.unpack("!I", data[8:ECHO_HEADER_BYTES])[0]
                         if sequence in sent_times:
                             received.setdefault(sequence, (time.perf_counter() - sent_times[sequence]) * 1000)
+                        # Newer targets append the source address they saw: the WAN that carried this burst.
+                        observed.setdefault("egress", unpack_address(data[ECHO_HEADER_BYTES:]))
 
             receiver = gevent.spawn(receive)
             for sequence in range(packets):
-                payload = nonce + struct.pack("!I", sequence) + b"m" * (packet_size - 12)
+                payload = (nonce + struct.pack("!I", sequence) + ADDRESS_REQUEST
+                           + b"m" * (packet_size - ECHO_HEADER_BYTES - len(ADDRESS_REQUEST)))
                 sent_times[sequence] = time.perf_counter()
                 sock.send(payload)
                 gevent.sleep(interval)
             deadline = time.perf_counter() + 0.5
             while len(received) < packets and time.perf_counter() < deadline and not receiver.dead:
                 gevent.sleep(0.01)
+            lost = len(sent_times) - len(received)
+            mode = MEDIA_MODES.get(self.runtime_config.get("media_mode"), MEDIA_MODES["strict"])
             if receive_errors:
                 error = receive_errors[0]
-            elif len(received) != packets:
-                error = RuntimeError(f"UDP packet loss: {packets - len(received)}/{packets}")
+            elif not received:
+                error = MediaFailure("media_no_reply", f"No UDP replies: 0/{len(sent_times)} packets answered")
+            elif lost * 100.0 / len(sent_times) > mode["tolerance_pct"].get(application, 0.0):
+                error = MediaFailure("media_loss", f"UDP packet loss: {lost}/{len(sent_times)}")
         except OSError as exc:
             error = exc
         finally:
@@ -290,13 +310,16 @@ class CorporateUser(HttpUser):
                 receiver.kill()
             if sock is not None:
                 sock.close()
+        context = self._context(application)
+        context.update(packets_sent=len(sent_times), packets_lost=len(sent_times) - len(received),
+                       egress=observed.get("egress"))
         self.environment.events.request.fire(
             request_type="UDP",
             name=f"{application}/media-burst",
             response_time=sum(received.values()) / len(received) if received else 0,
-            response_length=len(received) * 12,
+            response_length=len(received) * ECHO_HEADER_BYTES,
             exception=error,
-            context=self._context(application),
+            context=context,
         )
 
     def _app_voice(self):
@@ -366,6 +389,7 @@ class WorkloadController:
                     self.settings.database_path,
                     run_id=run["run_id"],
                     window_seconds=60,
+                    diagnosis=False,
                 )
                 users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
                 sample = {
@@ -395,9 +419,11 @@ class WorkloadController:
         response_length,
         exception,
         context,
+        response=None,
         **kwargs,
     ):
         ctx = context or {}
+        details = response_details(response, response_time)
         item = {
             "timestamp": time.time(),
             "run_id": ctx.get("run_id"),
@@ -410,6 +436,14 @@ class WorkloadController:
             "response_time_ms": response_time,
             "response_length": response_length or 0,
             "error": str(exception)[:240] if exception else None,
+            "cause": classify_failure(exception),
+            "wait_ms": details["wait_ms"],
+            "transfer_ms": details["transfer_ms"],
+            "bytes_up": details["bytes_up"],
+            "status_code": details["status_code"],
+            "packets_sent": ctx.get("packets_sent"),
+            "packets_lost": ctx.get("packets_lost"),
+            "egress": ctx.get("egress") or details["egress"],
         }
         try:
             self.transaction_queue.put_nowait(item)
@@ -419,7 +453,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -434,6 +468,7 @@ class WorkloadController:
         pattern = str(raw.get("pattern") or profile["pattern"])
         if pattern not in PATTERNS:
             raise ValueError("Unknown traffic pattern.")
+        media_mode = validated_media_mode(raw.get("media_mode", "strict"))
 
         target = str(raw.get("target") or self.settings.default_target).rstrip("/")
         parsed = urlsplit(target)
@@ -471,6 +506,7 @@ class WorkloadController:
             "pattern": pattern,
             "personas": personas,
             "applications": applications,
+            "media_mode": media_mode,
             "udp_port": self.settings.target_udp_port,
             "stage": None,
             "mix_revision": 0,
@@ -526,7 +562,24 @@ class WorkloadController:
                     "activity": run["activity"],
                 }
 
+            gevent.spawn(self._probe_target, run["run_id"], run["target"])
             return self.status()
+
+    def _probe_target(self, run_id: str, target: str):
+        # An outdated target cannot report the WAN and may not echo media at all.
+        info = {"checked_at": time.time(), "version": None, "capabilities": [], "error": None}
+        try:
+            response = requests.get(target + "/health", timeout=(3, 3), allow_redirects=False)
+            payload = response.json() if response.ok else {}
+            if isinstance(payload, dict):
+                info["version"] = str(payload["version"])[:40] if payload.get("version") else None
+                capabilities = payload.get("capabilities")
+                info["capabilities"] = [str(item)[:40] for item in capabilities][:20] if isinstance(capabilities, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            info["error"] = str(exc)[:200]
+        with self.lock:
+            if self.run and self.run["run_id"] == run_id:
+                self.run["target_info"] = info
 
     def _run_pattern(self, run_id: str, stages: list):
         for index, stage in enumerate(stages, start=1):
@@ -567,8 +620,8 @@ class WorkloadController:
                 raise RuntimeError("No workload is running.")
             if not isinstance(raw, dict):
                 raise ValueError("Workload configuration must be an object.")
-            if set(raw) - {"users", "spawn_rate", "activity", "personas", "applications"}:
-                raise ValueError("Adjust supports users, spawn_rate, activity, personas and applications only.")
+            if set(raw) - {"users", "spawn_rate", "activity", "personas", "applications", "media_mode"}:
+                raise ValueError("Adjust supports users, spawn_rate, activity, personas, applications and media_mode only.")
             candidate = copy.deepcopy(self.run)
             if "users" in raw:
                 candidate["target_users"] = bounded_number(raw["users"], "users", 1, 5000, integer=True)
@@ -578,6 +631,8 @@ class WorkloadController:
                 if not isinstance(raw["activity"], str) or raw["activity"] not in ACTIVITY:
                     raise ValueError("Unknown activity level.")
                 candidate["activity"] = raw["activity"]
+            if "media_mode" in raw:
+                candidate["media_mode"] = validated_media_mode(raw["media_mode"])
             for key, allowed in (("applications", APPLICATIONS), ("personas", PERSONAS)):
                 if key in raw:
                     candidate[key] = normalized_mix(raw[key], allowed)
@@ -634,7 +689,11 @@ class WorkloadController:
             self.settings.database_path,
             run_id=run["run_id"],
             window_seconds=60,
+            media_mode=run.get("media_mode", "strict"),
         )
+        outdated = target_finding(run.get("target_info"), __version__)
+        if outdated:
+            dem["diagnosis"]["findings"].insert(0, outdated)
         dem["endpoint_count"] = len(dem["endpoints"])
         dem["endpoints"] = dict(sorted(dem["endpoints"].items(), key=lambda item: item[1]["experience_score"] if item[1]["experience_score"] is not None else 999)[:200])
         return {

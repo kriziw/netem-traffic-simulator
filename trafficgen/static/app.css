@@ -66,3 +66,18 @@ body.update-active{overflow:hidden}
 @keyframes update-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.9)}}
 @keyframes update-fade{from{opacity:0}}
 @media(prefers-reduced-motion:reduce){.update-screen,.update-ring::before,.update-ring::after,.update-mark,.update-steps li.active::before{animation:none}}
+
+/* Diagnosis: findings explain degraded experience; severity colors follow the status palette. */
+.findings{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.finding{display:grid;grid-template-columns:12px 1fr;gap:10px;align-items:start;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:rgba(9,21,34,.6)}
+.finding-dot{width:9px;height:9px;border-radius:50%;margin-top:3px;background:var(--blue)}
+.finding.bad{border-color:rgba(255,111,125,.4)}.finding.bad .finding-dot{background:var(--danger)}
+.finding.warn{border-color:rgba(242,189,91,.35)}.finding.warn .finding-dot{background:var(--warn)}
+.finding-title{font-size:11px;font-weight:700;overflow-wrap:anywhere}
+.finding-detail{font-size:9.5px;color:var(--muted);line-height:1.55;margin-top:3px;overflow-wrap:anywhere}
+.finding-meta{font-size:9px;color:var(--muted2);margin-top:5px;overflow-wrap:anywhere}
+.finding-empty{font-size:10px;color:var(--muted);padding:6px 2px}
+.field-help{font-size:9px;color:var(--muted2);line-height:1.5;margin:-4px 0 12px}
+.live-finding{display:block;margin-top:12px;padding:9px 11px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;font-size:10px;color:#cbd7e4;overflow-wrap:anywhere}
+.live-finding.warn{border-left-color:var(--warn)}.live-finding.bad{border-left-color:var(--danger)}.live-finding.info{border-left-color:var(--blue)}
+#dem-apps td,#dem-egress td{white-space:nowrap}

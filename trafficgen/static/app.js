@@ -58,6 +58,52 @@ window.TrafficGen = (() => {
     if(value==null)return "—";
     const n=Number(value); return Number.isFinite(n)?n.toFixed(digits):"—";
   }
+  function esc(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function ms(value){return value==null?"—":Number(value)<1000?fmt(value,0)+" ms":fmt(Number(value)/1000,1)+" s";}
+  function words(key){return String(key||"").replaceAll("_"," ");}
+  function egressNote(byEgress){
+    return Object.entries(byEgress||{}).map(([address,value])=>{
+      if(typeof value==="number")return esc(address)+" ×"+value;
+      const parts=[value.p95_wait_ms!=null?"wait P95 "+ms(value.p95_wait_ms):null,value.p95_ms!=null?"P95 "+ms(value.p95_ms):null,
+        value.median_mbps!=null?fmt(value.median_mbps,1)+" Mbit/s":null].filter(Boolean);
+      return esc(address)+(parts.length?" ("+parts.join(", ")+")":"");
+    }).join(" · ");
+  }
+  // Findings explain what the simulated users feel and which appliance address (WAN) carried it.
+  function findingsHtml(diagnosis){
+    const items=(diagnosis&&diagnosis.findings)||[];
+    if(!items.length)return '<li class="finding-empty">No problems detected in this window.</li>';
+    return items.map(item=>{
+      const via=egressNote(item.by_egress);
+      return '<li class="finding '+esc(item.severity)+'"><span class="finding-dot" aria-hidden="true"></span><div>'+
+        '<div class="finding-title">'+esc(item.title)+'</div><div class="finding-detail">'+esc(item.detail)+'</div>'+
+        (via?'<div class="finding-meta">Seen via '+via+'</div>':'')+'</div></li>';
+    }).join("");
+  }
+  function causeText(causes,labels){
+    const entries=Object.entries(causes||{});
+    return entries.length?entries.map(([key,count])=>esc((labels||{})[key]||words(key))+" ×"+count).join(", "):"—";
+  }
+  function egressRowsHtml(diagnosis){
+    const entries=Object.entries((diagnosis&&diagnosis.egress)||{}).sort((a,b)=>b[1].requests-a[1].requests);
+    if(!entries.length)return '<tr><td colspan="7" class="muted">No transactions in this window.</td></tr>';
+    return entries.map(([address,item])=>{
+      const worst=Object.entries(item.applications||{}).filter(([,app])=>app.failures>0).sort((a,b)=>a[1].availability_pct-b[1].availability_pct)[0];
+      return "<tr><td class='mono'>"+esc(address)+"</td><td>"+(item.experience_score??"—")+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
+        "</td><td>"+ms(item.p95_ms)+"</td><td>"+item.requests+"</td><td>"+causeText(item.causes,diagnosis.cause_labels)+"</td><td>"+
+        (worst?esc(words(worst[0]))+" "+fmt(worst[1].availability_pct,1)+"%":"—")+"</td></tr>";
+    }).join("");
+  }
+  function appRowsHtml(applications,labels){
+    return Object.entries(applications||{}).map(([key,item])=>{
+      const rate=[item.median_down_mbps!=null?"↓ "+fmt(item.median_down_mbps,1):null,item.median_up_mbps!=null?"↑ "+fmt(item.median_up_mbps,1):null].filter(Boolean).join(" · ");
+      const media=item.media?fmt(item.media.loss_pct,2)+"% · "+(item.media.bursts_with_loss+item.media.no_reply)+"/"+item.media.bursts+" bursts":"—";
+      const top=item.top_cause?esc((labels||{})[item.top_cause]||words(item.top_cause))+" ×"+(item.causes||{})[item.top_cause]:"—";
+      return "<tr><td>"+esc(words(key))+"</td><td>"+(item.experience_score??"—")+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
+        "</td><td>"+ms(item.p95_ms)+"</td><td>"+ms(item.p95_wait_ms)+"</td><td>"+ms(item.p95_transfer_ms)+"</td><td>"+(rate?rate+" Mbit/s":"—")+
+        "</td><td>"+media+"</td><td>"+top+"</td><td>"+item.requests+"</td></tr>";
+    }).join("");
+  }
   function pathFor(values){
     if(!values.length) return "";
     const max=100,min=0;
@@ -97,6 +143,9 @@ window.TrafficGen = (() => {
         set("live-fps",dem.failures_per_second??0);
         set("live-p50",(dem.p50_ms==null?"—":fmt(dem.p50_ms,0))+" ms");
         set("live-p95-card",(dem.p95_ms==null?"—":fmt(dem.p95_ms,0))+" ms");
+        const top=((dem.diagnosis||{}).findings||[])[0];
+        const finding=document.getElementById("live-finding");
+        if(finding){finding.textContent=top?top.title:"No problems detected in the last 60 seconds.";finding.className="live-finding "+(top?top.severity:"good");}
       }catch(_){}
     }
     refresh();
@@ -119,9 +168,14 @@ window.TrafficGen = (() => {
           document.getElementById("dem-score").textContent=s.experience_score??"—";
           document.getElementById("dem-rating").textContent=s.experience||"No data";
           document.getElementById("dem-availability").textContent=s.availability_pct==null?"—":fmt(s.availability_pct,2)+"%";
-          document.getElementById("dem-p95").textContent=s.p95_ms==null?"—":fmt(s.p95_ms,0)+" ms";
+          document.getElementById("dem-p95").textContent=s.interactive_p95_ms==null?"—":fmt(s.interactive_p95_ms,0)+" ms";
+          document.getElementById("dem-p95-all").textContent="web, collaboration, DNS · all apps "+(s.p95_ms==null?"—":fmt(s.p95_ms,0)+" ms");
           document.getElementById("dem-users").textContent=payload.users??0;
-          document.getElementById("dem-apps").innerHTML=rows(s.applications||{});
+          const diagnosis=s.diagnosis||{};
+          document.getElementById("dem-findings").innerHTML=findingsHtml(diagnosis);
+          document.getElementById("dem-egress").innerHTML=egressRowsHtml(diagnosis);
+          document.getElementById("dem-media-mode").textContent=words(diagnosis.media_mode||"strict").replace(/^./,c=>c.toUpperCase())+" media";
+          document.getElementById("dem-apps").innerHTML=appRowsHtml(s.applications||{},diagnosis.cause_labels);
           document.getElementById("dem-personas").innerHTML=rows(s.personas||{});
           document.getElementById("dem-endpoints").innerHTML=endpointRows(s.endpoints||{});
         }
@@ -239,5 +293,5 @@ window.TrafficGen = (() => {
       }catch(_){}
     }poll();repeat(poll,2000);
   }
-  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen};
+  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml};
 })();
