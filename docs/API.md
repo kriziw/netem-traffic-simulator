@@ -67,7 +67,7 @@ Returns experience score (0–100), experience rating, availability, P50/P95 res
 
 Application summaries add `class` (`interactive`, `bulk`, `realtime`), `causes`, `top_cause`, `p95_wait_ms` (request sent until the response starts, including uploads), `p95_transfer_ms` (receiving the response), `median_down_mbps`/`median_up_mbps` per transfer of at least 64 KiB, `transfer_share` and, for voice/video, `media` (bursts, packets sent/lost, loss %, bursts with loss, bursts without reply, `fail_by_mode`).
 
-Egress attribution needs a target from the same release: it adds the `X-NetEm-Observed-Source` header and, for media probes that carry the `NTA1` marker after the 12-byte nonce/sequence header, appends the observed source address to the echo. Older probes get the plain 12-byte echo. The target's `/health` reports `version` and `capabilities`; the simulator checks it when a workload starts and reports an older target as the `target_outdated` finding.
+Egress attribution needs a compatible target: it adds the `X-NetEm-Observed-Source` header and, for media probes that carry the `NTA1` marker after the 12-byte nonce/sequence header, appends the observed source address to the echo. Older probes get the plain 12-byte echo. The target's `/health` reports `version` and `capabilities`; the simulator checks it when a workload starts and every 30 seconds while running, so upgrades are detected without restarting a workload. A target missing capabilities produces `target_outdated` only when its reported version is demonstrably older, otherwise `target_incompatible`. Failed or invalid health checks do not establish that a target is outdated. Verify health from the simulator's routed path, not only on the target host.
 
 ### `GET /api/v1/dem/applications?window=60`
 
