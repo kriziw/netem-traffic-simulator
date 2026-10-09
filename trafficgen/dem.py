@@ -100,9 +100,15 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
 
     by_app = defaultdict(list)
     by_persona = defaultdict(list)
+    by_endpoint = defaultdict(list)
+    endpoint_persona = {}
     for row in rows:
         by_app[row["application"] or "other"].append(row)
         by_persona[row["persona"] or "unknown"].append(row)
+        endpoint_id = row["endpoint_id"] or "unknown"
+        by_endpoint[endpoint_id].append(row)
+        if endpoint_id != "unknown":
+            endpoint_persona[endpoint_id] = row["persona"] or "unknown"
 
     app_summary = {
         key: summarize_rows(items, application=key)
@@ -112,6 +118,14 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         key: summarize_rows(items)
         for key, items in sorted(by_persona.items())
     }
+    endpoint_summary = {}
+    for key, items in by_endpoint.items():
+        if key == "unknown":
+            continue
+        summary = summarize_rows(items)
+        summary["endpoint_id"] = key
+        summary["persona"] = endpoint_persona.get(key, "unknown")
+        endpoint_summary[key] = summary
 
     if rows:
         duration = max(1.0, min(window_seconds, now - rows[0]["timestamp"]))
@@ -129,4 +143,5 @@ def dem_summary(database_path, run_id=None, window_seconds=60):
         "failures_per_second": round(failures_per_second, 3),
         "applications": app_summary,
         "personas": persona_summary,
+        "endpoints": endpoint_summary,
     }
