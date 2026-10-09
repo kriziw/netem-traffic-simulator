@@ -19,18 +19,28 @@ window.TrafficGen = (() => {
   async function liveStatus(){
     async function refresh(){
       try{
-        const response=await fetch("/api/v1/health",{cache:"no-store"});
+        const response=await fetch("/ui/status",{cache:"no-store"});
         if(!response.ok)return;
-        const statusResponse=await fetch("/api/v1/status",{cache:"no-store",headers:window.__trafficgenApiKey?{"Authorization":"Bearer "+window.__trafficgenApiKey}:{}});
-        // The administrator UI does not need to expose the API key to JavaScript,
-        // so status polling is performed through the DEM page endpoints only when
-        // integration credentials are explicitly available. Normal page reloads
-        // keep server-rendered state authoritative.
-        if(!statusResponse.ok)return;
+        const status=await response.json();
+        const dem=status.dem||{};
+        const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value;};
+        set("live-state",String(status.status||"idle").toUpperCase());
+        set("live-run",status.run?.run_id||"No active run");
+        set("live-users",status.users??0);
+        set("live-score",dem.experience_score??"—");
+        set("live-rating",dem.experience||"No data");
+        set("live-availability",dem.availability_pct==null?"—":fmt(dem.availability_pct,2)+"%");
+        set("live-p95","P95 "+(dem.p95_ms==null?"—":fmt(dem.p95_ms,0))+" ms");
+        set("experience-score",dem.experience_score??"—");
+        set("experience-rating",dem.experience||"No data");
+        set("live-rps",dem.requests_per_second??0);
+        set("live-fps",dem.failures_per_second??0);
+        set("live-p50",(dem.p50_ms==null?"—":fmt(dem.p50_ms,0))+" ms");
+        set("live-p95-card",(dem.p95_ms==null?"—":fmt(dem.p95_ms,0))+" ms");
       }catch(_){}
     }
-    // Intentionally no automatic API-key injection into the admin browser.
-    // Server-rendered pages remain safe from accidental credential disclosure.
+    refresh();
+    setInterval(refresh,2500);
   }
   async function demPage(){
     const range=document.getElementById("dem-range");
