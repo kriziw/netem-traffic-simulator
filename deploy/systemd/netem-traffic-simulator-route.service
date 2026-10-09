@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore selected simulator benchmark route
+After=network-online.target
+Wants=network-online.target
+Before=netem-traffic-simulator.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/netem-traffic-simulator
+ExecStart=/usr/bin/python3 -I -c "import sys; sys.path.insert(0, '/opt/netem-traffic-simulator'); from trafficgen.host_admin import main; main()" --restore-route
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

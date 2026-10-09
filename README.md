@@ -452,3 +452,37 @@ Conventional commits and squash-merge titles such as `feat:` and `fix:` drive se
 ## License
 
 MIT.
+
+## Updates, smooth controls, and appliance routing
+
+The **Updates & Appliance Routing** page adds stable-release checks and installation from this repository, LAN candidate discovery, saved appliance profiles, and verified target routing. UI form controls update in place, and DEM chart transitions animate without changing measured values or filling missing-data gaps.
+
+For an existing installation, run the new `scripts/install-lxc.sh` **once as root** after installing this release. It installs `git`, `iproute2`, `ping`, `curl` and the systemd administration units. The web service remains the unprivileged `trafficgen` account. A root-owned worker accepts only fixed update, discovery, and benchmark-route operations; it never accepts shell commands, custom repository URLs, or arbitrary filesystem paths.
+
+### Multiple SD-WAN appliances
+
+1. Keep `eth0` for management. Add an addressed LXC data NIC on each separate appliance LAN bridge/VLAN in Proxmox. Appliances may also share a LAN if each has a distinct gateway address. The simulator does not create Proxmox NICs or provision vendor appliances.
+2. Open **Updates & Appliance Routing**. Existing neighbors and configured gateways appear as candidates. **Scan data LANs** sends bounded ICMP probes only on directly connected, non-management IPv4 subnets of /24 or smaller (at most 1024 addresses). Larger LANs use existing neighbors or manual entry. Discovery does not identify a vendor conclusively; assign the vendor label yourself.
+3. Save a name, vendor label (Fortinet, VeloCloud, Cisco or Other), data interface, gateway and controlled target. The default target is `198.18.0.1`.
+4. Stop the workload and click **Verify & select**. The helper adds a `/32` route to a target within `198.18.0.0/15`, checks the kernel's selected gateway/interface and calls the target's HTTP health endpoint. Failed verification restores the previous managed route. Existing unmanaged host routes are never replaced.
+5. Start a workload whose target matches the selected address. The selected `/32` route is restored after reboot. **Clear managed route** removes only the helper's host route.
+
+Selecting an appliance does not change a default route, the management interface, DHCP, or appliance policies. The appliance still needs routing/NAT and access to target TCP 8090 and UDP 9000. HTTP health verifies TCP only; use a voice/video workload to verify UDP/media delivery and observe the appliance/NetEm counters for the WAN path.
+
+With a managed target route, you can keep the normal management default gateway on `eth0` for updates and management replies, because the more specific `/32` target route uses the selected appliance. If you previously removed the management default gateway for the manual deployment, restore it in Proxmox **after selecting and verifying the managed target route**. Do not add a second competing data-interface default gateway. On a nonstandard installation, root can change `management_interface` in `/var/lib/netem-traffic-simulator-admin/policy.json`; it defaults to `eth0`.
+
+### Stable-release updates
+
+Use **Check for updates**, then **Install update** while the workload is stopped. The worker revalidates the newest stable semantic-version GitHub release, clones only the fixed repository/tag, rejects modified installed files, keeps a rollback copy of the application and virtual environment, and runs the native installer. Passwords, API keys, certificates and runtime data remain outside the application directory. A failed installation restores the old application and virtual environment and attempts to restart the old service; inspect systemd logs if recovery fails. Updates require Internet access, enough disk space for the backup, and may briefly interrupt the management connection while the service restarts.
+
+The controlled target has no management GUI and must be updated separately with `scripts/install-target.sh`, to the same release when a protocol change requires it.
+
+Integration clients can inspect `GET /api/v1/network` and select an existing saved appliance with authenticated `POST /api/v1/network/select` and `{"appliance_id":"..."}`. Selection returns `202` with a job ID; poll the network endpoint until that job completes or fails before starting a workload. Network controls require the same Bearer API key as workload controls. GUI controls retain administrator login and CSRF checks.
+
+Diagnostics:
+
+```bash
+systemctl status netem-traffic-simulator-admin.path --no-pager
+journalctl -u netem-traffic-simulator-admin.service -n 100 --no-pager
+ip route get 198.18.0.1
+```

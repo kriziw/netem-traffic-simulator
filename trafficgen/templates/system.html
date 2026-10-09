@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}System · Traffic Simulator{% endblock %}
+{% block crumb %}Updates & Appliance Routing{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Updates & appliance routing</h1><p>Select the SD-WAN LAN gateway that carries your simulated users. Management routing stays separate.</p></div></div>
+{% if not system.ready %}<div class="flash warning">Run the latest scripts/install-lxc.sh once as root to enable updates and route administration.</div>{% endif %}
+<section class="card"><div class="card-head"><div class="card-title">Stable releases</div></div><div class="card-body">
+<p>Installed: <strong>v{{ app_version }}</strong>. <span id="release-status">{% if system.release.tag %}Latest: {{ system.release.tag }}{% else %}No release check yet.{% endif %}</span></p>
+<div class="actions">
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="check_update"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Check for updates</button></form>
+<form method="post" action="{{ url_for('system_action') }}" onsubmit="return confirm('Install the latest stable release and restart the simulator?');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="install_update"><input type="hidden" name="tag" value="{{ system.release.tag or '' }}"><button class="btn primary" id="install-update" {% if not system.ready or system.busy or not system.release.available or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Install update</button></form>
+</div><p class="muted">Updates preserve passwords, API keys, certificates, saved appliances and run history. The service restarts briefly. Update the controlled target to the same release separately when required.</p>
+</div></section>
+<section class="card space-top"><div class="card-head"><div class="card-title">Discover LAN gateways</div></div><div class="card-body">
+<p class="muted">Neighbor entries and configured gateways are candidates, not verified SD-WAN identities. Vendor labels are user supplied. Fortinet, VeloCloud and Cisco are supported as IP gateways without vendor credentials.</p>
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="scan"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Scan data LANs</button></form>
+<p class="muted">Scans only non-management directly connected IPv4 LANs of /24 or smaller. Add and address an LXC data NIC for each separate appliance LAN in Proxmox first.</p>
+<div class="table-wrap"><table><thead><tr><th>Interface</th><th>Candidate gateway</th><th>Evidence</th><th></th></tr></thead><tbody id="gateway-candidates">
+{% for candidate in system.network.candidates %}<tr><td>{{ candidate.interface }}</td><td>{{ candidate.gateway }}</td><td>{{ candidate.evidence }}</td><td><button class="btn small" type="button" data-candidate-interface="{{ candidate.interface }}" data-candidate-gateway="{{ candidate.gateway }}">Use candidate</button></td></tr>{% endfor %}
+</tbody></table></div>
+<form method="post" action="{{ url_for('system_action') }}" class="space-top">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="save_appliance">
+<div class="form-grid">
+<div><label>Name</label><input name="name" required maxlength="80" placeholder="FortiGate lab"></div>
+<div><label>Vendor label</label><select name="vendor">{% for vendor in vendors %}<option>{{ vendor }}</option>{% endfor %}</select></div>
+<div><label>Data interface</label><select name="interface" id="appliance-interface">{% for row in system.network.interfaces %}<option value="{{ row.interface }}">{{ row.interface }} · {{ row.addresses|join(', ') }}</option>{% endfor %}</select></div>
+<div><label>LAN gateway IPv4</label><input name="gateway" id="appliance-gateway" required placeholder="10.250.10.1"></div>
+<div><label>Controlled target IPv4</label><input name="target" value="198.18.0.1" required></div>
+</div><button class="btn primary space-top">Save appliance</button></form>
+</div></section>
+<section class="card space-top"><div class="card-head"><div class="card-title">Saved appliances</div></div><div class="card-body">
+<div id="selected-route" class="mono">{% if system.selected %}{{ system.selected.target }} → {{ system.selected.gateway }} via {{ system.selected.interface }}{% else %}No managed route selected. Existing OS routing is in use.{% endif %}</div>
+{% for appliance in system.appliances %}<div class="appliance-row"><div><strong>{{ appliance.name }}</strong> · {{ appliance.vendor }}<div class="muted mono">{{ appliance.gateway }} on {{ appliance.interface }} → {{ appliance.target }}</div></div><div class="actions">
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="route"><input type="hidden" name="appliance_id" value="{{ appliance.id }}"><button class="btn primary" {% if not system.ready or system.busy or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Verify & select</button></form>
+<form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="delete_appliance"><input type="hidden" name="appliance_id" value="{{ appliance.id }}"><button class="btn">Remove</button></form>
+</div></div>{% else %}<div class="empty">Save a candidate or enter a gateway manually.</div>{% endfor %}
+<form method="post" action="{{ url_for('system_action') }}" class="space-top"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="clear_route"><button class="btn" {% if not system.ready or system.busy or not system.selected or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Clear managed route</button></form>
+<p class="muted">Selection installs only a persistent /32 route to the benchmark target. The helper verifies target health through the selected gateway and restores the previous route if verification fails. Stop workloads before switching. The appliance must already route and permit TCP 8090 and UDP 9000 to the target.</p>
+</div></section>
+<section class="card space-top"><div class="card-head"><div class="card-title">Task result</div></div><div class="card-body" id="system-job" data-busy="{{ 'true' if system.busy else 'false' }}" role="status">{{ system.job.message or 'No administration task yet.' }}</div></section>
+{% endblock %}
+{% block scripts %}<script>TrafficGen.systemPage();</script>{% endblock %}
