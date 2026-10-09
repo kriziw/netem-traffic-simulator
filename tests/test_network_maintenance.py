@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import time
 from unittest.mock import patch
 
 import pytest
@@ -185,6 +186,53 @@ def test_release_naming_matches_netem():
     assert config['include-v-in-tag'] is True
     assert config['include-v-in-release-name'] is True
     assert 'package-name' not in config['packages']['.']
+
+
+def test_cached_release_check_is_compared_with_running_version(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, 'ADMIN_DIR', tmp_path)
+    major, minor, patch_ = maintenance.version_tuple(maintenance.__version__)
+    # A check cached before an install still says available; the running version decides.
+    for tag, available in ((f'v{major}.{minor}.{patch_}', False), (f'v{major}.{minor}.{patch_ + 1}', True),
+                           (f'v{major}.{minor - 1 if minor else 0}.0', False), ('main', False)):
+        (tmp_path / 'release.json').write_text(json.dumps({'tag': tag, 'available': True}))
+        assert maintenance.release_status()['available'] is available
+    (tmp_path / 'release.json').write_text('[]')
+    assert maintenance.release_status() == {}
+
+
+def test_install_update_is_refused_without_a_newer_release(simulator, tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, 'ADMIN_DIR', tmp_path)
+    client = simulator.test_client()
+    with client.session_transaction() as session:
+        session['trafficgen_admin'] = True
+        session['csrf_token'] = 'token'
+    current = 'v' + maintenance.__version__
+    (tmp_path / 'release.json').write_text(json.dumps({'tag': current, 'available': True}))
+    with patch.object(maintenance, 'enqueue') as enqueue:
+        response = client.post('/settings/system/action', data={'csrf_token': 'token', 'action': 'install_update', 'tag': current})
+        assert response.status_code == 302
+        enqueue.assert_not_called()
+        major, minor, patch_ = maintenance.version_tuple(current)
+        newer = f'v{major}.{minor}.{patch_ + 1}'
+        (tmp_path / 'release.json').write_text(json.dumps({'tag': newer, 'available': False}))
+        client.post('/settings/system/action', data={'csrf_token': 'token', 'action': 'install_update', 'tag': newer})
+        enqueue.assert_called_once_with(simulator.config['TRAFFICGEN_SETTINGS'], 'install_update', {'tag': newer})
+
+
+def test_status_reports_update_in_progress_for_the_update_screen(simulator, tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, 'ADMIN_DIR', tmp_path)
+    (tmp_path / 'install-manifest.json').write_text('{}')
+    settings = simulator.config['TRAFFICGEN_SETTINGS']
+    maintenance.enqueue(settings, 'check_update')
+    assert maintenance.status(settings)['busy'] and not maintenance.status(settings)['updating']
+    (settings.runtime_dir / 'admin-request.json').unlink()
+    maintenance.enqueue(settings, 'install_update', {'tag': 'v9.9.9'})
+    assert maintenance.status(settings)['updating']  # queued, before the worker picks it up
+    (settings.runtime_dir / 'admin-request.json').unlink()
+    (tmp_path / 'status.json').write_text(json.dumps({'action': 'install_update', 'state': 'running', 'timestamp': time.time()}))
+    assert maintenance.status(settings)['updating']
+    (tmp_path / 'status.json').write_text(json.dumps({'action': 'install_update', 'state': 'completed', 'timestamp': time.time()}))
+    assert not maintenance.status(settings)['updating']
 
 
 def test_update_worker_version_file_is_release_managed():

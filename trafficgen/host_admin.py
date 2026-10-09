@@ -16,7 +16,7 @@ import tempfile
 import time
 from urllib.request import Request, urlopen
 
-from .maintenance import ADMIN_DIR, read_json
+from .maintenance import ADMIN_DIR, read_json, version_tuple
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config, collect
 from .network import discover, ip_json, run, validate_route, validate_interface, interfaces
@@ -43,13 +43,6 @@ def atomic_json(path, data, mode=0o644):
 
 def management():
     return read_json(ADMIN_DIR / 'policy.json', {}).get('management_interface', 'eth0')
-
-
-def version_tuple(value):
-    value = value.removeprefix('netem-traffic-simulator-')
-    if not re.fullmatch(r'v?\d+\.\d+\.\d+', value):
-        raise ValueError('Only stable semantic-version releases are supported.')
-    return tuple(map(int, value.lstrip('v').split('.')))
 
 
 def check_release():
