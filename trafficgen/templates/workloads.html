@@ -22,7 +22,9 @@
         <div><label>Target users</label><input type="number" name="users" min="1" max="5000" value="{{ status.run.target_users }}"></div>
         <div><label>Spawn rate · users/s</label><input type="number" name="spawn_rate" min="0.1" max="1000" step="0.1" value="{{ status.run.spawn_rate }}"></div>
         <div><label>Activity</label><select name="activity">{% for key,item in catalog.activity_levels.items() %}<option value="{{ key }}" {% if key == status.run.activity %}selected{% endif %}>{{ key|title }}</option>{% endfor %}</select></div>
+        <div><label>Voice/video judging</label><select name="media_mode">{% for key,item in catalog.media_modes.items() %}<option value="{{ key }}" title="{{ item.description }}" {% if key == status.run.media_mode %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></div>
       </div>
+      <div class="field-help">{% for key,item in catalog.media_modes.items() %}<strong>{{ item.label }}:</strong> {{ item.description }} {% endfor %}</div>
       <button class="btn primary" type="submit">Apply live adjustment</button>
     </form>
   </div>
@@ -39,7 +41,9 @@
         <div><label>Activity</label><select name="activity">{% for key,item in catalog.activity_levels.items() %}<option value="{{ key }}" {% if key == 'normal' %}selected{% endif %}>{{ key|title }}</option>{% endfor %}</select></div>
         <div><label>Traffic pattern</label><select name="pattern">{% for key,item in catalog.patterns.items() %}<option value="{{ key }}">{{ item.label }}</option>{% endfor %}</select></div>
         <div><label>Controlled target</label><input type="url" name="target" value="{{ config_default_target if config_default_target is defined else '' }}" placeholder="http://ISP-ROUTER:8090"></div>
+        <div><label>Voice/video judging</label><select name="media_mode">{% for key,item in catalog.media_modes.items() %}<option value="{{ key }}" title="{{ item.description }}">{{ item.label }}</option>{% endfor %}</select></div>
       </div>
+      <div class="field-help">{% for key,item in catalog.media_modes.items() %}<strong>{{ item.label }}:</strong> {{ item.description }} {% endfor %}</div>
       <button class="btn primary" type="submit">Start simulation</button>
     </form>
   </div>

@@ -40,6 +40,8 @@
         <div><span>P50</span><strong id="live-p50">{{ "%.0f"|format(status.dem.p50_ms) if status.dem.p50_ms is not none else '—' }} ms</strong></div>
         <div><span>P95</span><strong id="live-p95-card">{{ "%.0f"|format(status.dem.p95_ms) if status.dem.p95_ms is not none else '—' }} ms</strong></div>
       </div>
+      {% set top_finding = ((status.dem.diagnosis or {}).findings or [none])[0] %}
+      <a class="live-finding {{ top_finding.severity if top_finding else 'good' }}" id="live-finding" href="{{ url_for('dem_page') }}">{{ top_finding.title if top_finding else 'No problems detected in the last 60 seconds.' }}</a>
     </div>
   </section>
 

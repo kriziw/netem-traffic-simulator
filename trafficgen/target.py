@@ -12,8 +12,19 @@ import socket
 import threading
 from flask import Flask, Response, jsonify, request
 
+from . import __version__
+from .wire import ADDRESS_REQUEST, ECHO_HEADER_BYTES, OBSERVED_SOURCE_HEADER, normalize_address, pack_address
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
+
+
+@app.after_request
+def observed_source(response):
+    address = normalize_address(request.remote_addr)
+    if address:
+        response.headers[OBSERVED_SOURCE_HEADER] = address
+    return response
 
 
 def bounded_size(raw, minimum=1, maximum=8192):
@@ -35,7 +46,8 @@ def byte_stream(size_bytes, chunk=65536):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "netem-traffic-target"}
+    return {"status": "ok", "service": "netem-traffic-target", "version": __version__,
+            "capabilities": ["media-echo", "observed-source"]}
 
 
 @app.get("/web/page")
@@ -123,8 +135,14 @@ def udp_sink(host: str, port: int, stop_event: threading.Event, sock=None):
     while not stop_event.is_set():
         try:
             data, peer = sock.recvfrom(65535)
-            if len(data) >= 12:
-                sock.sendto(data[:12], peer)
+            if len(data) >= ECHO_HEADER_BYTES:
+                reply = data[:ECHO_HEADER_BYTES]
+                if data[ECHO_HEADER_BYTES:ECHO_HEADER_BYTES + len(ADDRESS_REQUEST)] == ADDRESS_REQUEST:
+                    try:
+                        reply += pack_address(peer[0])
+                    except ValueError:
+                        pass
+                sock.sendto(reply, peer)
         except socket.timeout:
             continue
         except OSError:

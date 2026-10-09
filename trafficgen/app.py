@@ -32,6 +32,7 @@ from .config import (
 )
 from .database import init_db, query_dem_timeseries, recent_runs
 from .dem import dem_summary
+from .diagnosis import target_finding
 from .engine import WorkloadController
 from .profiles import profile_payload
 from . import maintenance
@@ -100,6 +101,12 @@ def create_app():
             if urlsplit(str(payload.get("target", ""))).hostname != selected["target"]:
                 raise ValueError("Workload target must match the selected appliance's benchmark route.")
         return payload
+
+    def with_target_finding(summary, status):
+        finding = target_finding((status.get("run") or {}).get("target_info"), __version__)
+        if finding and summary.get("diagnosis"):
+            summary["diagnosis"]["findings"].insert(0, finding)
+        return summary
 
     def saved_appliances():
         rows = maintenance.read_json(settings.runtime_dir / "appliances.json", [])
@@ -242,6 +249,7 @@ def create_app():
             "activity": request.form.get("activity"),
             "pattern": request.form.get("pattern"),
             "target": request.form.get("target"),
+            "media_mode": request.form.get("media_mode") or "strict",
         }
         try:
             app.config["TRAFFICGEN_CONTROLLER"].start(routed_payload(payload))
@@ -257,6 +265,7 @@ def create_app():
             "users": request.form.get("users"),
             "spawn_rate": request.form.get("spawn_rate"),
             "activity": request.form.get("activity"),
+            "media_mode": request.form.get("media_mode"),
         }
         payload = {key: value for key, value in payload.items() if value not in (None, "")}
         try:
@@ -278,11 +287,12 @@ def create_app():
     def dem_page():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
         return render_template(
             "dem.html",
             page="dem",
             status=status,
-            summary=dem_summary(settings.database_path, run_id=run_id, window_seconds=60),
+            summary=with_target_finding(dem_summary(settings.database_path, run_id=run_id, window_seconds=60, media_mode=media_mode), status),
             runs=recent_runs(settings.database_path, 12),
         )
 
@@ -300,15 +310,17 @@ def create_app():
             return {"error": "minutes must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
         return jsonify(
             {
                 "timestamp": time.time(),
                 "users": status.get("users", 0),
-                "summary": dem_summary(
+                "summary": with_target_finding(dem_summary(
                     settings.database_path,
                     run_id=run_id,
                     window_seconds=min(3600, minutes * 60),
-                ),
+                    media_mode=media_mode,
+                ), status),
                 "samples": query_dem_timeseries(
                     settings.database_path,
                     time.time() - minutes * 60,
@@ -447,10 +459,12 @@ def create_app():
             return {"error": "window must be an integer from 10 to 3600 seconds."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
         summary = dem_summary(
             settings.database_path,
             run_id=run_id,
             window_seconds=window,
+            media_mode=media_mode,
         )
         summary["active_users"] = status.get("users", 0)
         summary["workload_status"] = status.get("status", "idle")
@@ -466,7 +480,8 @@ def create_app():
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window)
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
+        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -485,7 +500,8 @@ def create_app():
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window)
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
+        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -505,7 +521,8 @@ def create_app():
             return {"error": "window/limit must be integers."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window)
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
+        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         endpoints = list(summary["endpoints"].values())
         endpoints.sort(
             key=lambda item: (
@@ -552,7 +569,8 @@ def create_app():
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window)
+        media_mode = (status.get("run") or {}).get("media_mode", "strict")
+        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -568,9 +586,11 @@ def create_app():
                     "availability_pct": summary["availability_pct"],
                     "p50_ms": summary["p50_ms"],
                     "p95_ms": summary["p95_ms"],
+                    "interactive_p95_ms": summary["interactive_p95_ms"],
                     "requests_per_second": summary["requests_per_second"],
                     "failures_per_second": summary["failures_per_second"],
                 },
+                "diagnosis": with_target_finding(summary, status)["diagnosis"],
                 "applications": summary["applications"],
                 "personas": summary["personas"],
                 "endpoints": sorted(
