@@ -334,6 +334,33 @@ def create_app():
             }
         )
 
+    @app.get("/api/v1/dem/endpoints")
+    @bearer_required
+    def api_dem_endpoints():
+        try:
+            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            limit = max(1, min(1000, int(request.args.get("limit", "200"))))
+        except ValueError:
+            return {"error": "window/limit must be integers."}, 400
+        status = app.config["TRAFFICGEN_CONTROLLER"].status()
+        run_id = status.get("run", {}).get("run_id") if status.get("run") else None
+        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window)
+        endpoints = list(summary["endpoints"].values())
+        endpoints.sort(
+            key=lambda item: (
+                item["experience_score"] is None,
+                item["experience_score"] if item["experience_score"] is not None else 999,
+            )
+        )
+        return jsonify(
+            {
+                "timestamp": summary["timestamp"],
+                "window_seconds": window,
+                "run_id": run_id,
+                "endpoints": endpoints[:limit],
+            }
+        )
+
     @app.get("/api/v1/dem/timeseries")
     @bearer_required
     def api_dem_timeseries():
@@ -382,6 +409,13 @@ def create_app():
                 },
                 "applications": summary["applications"],
                 "personas": summary["personas"],
+                "endpoints": sorted(
+                    summary["endpoints"].values(),
+                    key=lambda item: (
+                        item["experience_score"] is None,
+                        item["experience_score"] if item["experience_score"] is not None else 999,
+                    ),
+                )[:50],
             }
         )
 
