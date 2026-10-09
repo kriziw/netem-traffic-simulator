@@ -96,7 +96,8 @@ def test_release_must_be_stable_and_newer(tmp_path, monkeypatch):
         def read(self, _): return json.dumps({'tag_name':'v0.3.0', 'draft':False, 'prerelease':False}).encode()
     with patch.object(host_admin, 'urlopen', return_value=Response()):
         assert host_admin.check_release()['available']
-    for tag in ('main', '-evil', 'v0.3.0-rc1'):
+    assert host_admin.version_tuple('netem-traffic-simulator-v0.3.0') == (0, 3, 0)
+    for tag in ('main', '-evil', 'v0.3.0-rc1', 'other-v0.3.0'):
         with pytest.raises(ValueError): host_admin.version_tuple(tag)
 
 
@@ -160,3 +161,27 @@ def test_selected_route_missing_blocks_api_workload_start(simulator):
         assert response.status_code == 400
         assert 'route is missing or changed' in response.json['error']
         start.assert_not_called()
+
+
+def test_legacy_release_tag_has_clean_display_and_keeps_real_checkout_tag(tmp_path, monkeypatch):
+    (tmp_path / 'trafficgen').mkdir()
+    (tmp_path / 'trafficgen/version.txt').write_text('0.2.1')
+    monkeypatch.setattr(host_admin, 'APP_DIR', tmp_path)
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path / 'admin')
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def read(self, _): return json.dumps({'tag_name': 'netem-traffic-simulator-v0.3.0'}).encode()
+    with patch.object(host_admin, 'urlopen', return_value=Response()):
+        result = host_admin.check_release()
+    assert result['available']
+    assert result['display_tag'] == 'v0.3.0'
+    assert result['tag'] == 'netem-traffic-simulator-v0.3.0'
+
+
+def test_release_naming_matches_netem():
+    config = json.loads(Path('release-please-config.json').read_text())
+    assert config['include-component-in-tag'] is False
+    assert config['include-v-in-tag'] is True
+    assert config['include-v-in-release-name'] is True
+    assert 'package-name' not in config['packages']['.']

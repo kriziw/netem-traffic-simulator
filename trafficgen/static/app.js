@@ -46,11 +46,12 @@ window.TrafficGen = (() => {
     try{await updatePage(await fetch(location.href,{cache:'no-store'}));}catch(error){showError(error.message);}finally{busy=false;}
   }
   document.addEventListener('submit',async event=>{
-    const form=event.target;if(event.defaultPrevented||!(form instanceof HTMLFormElement)||form.method.toLowerCase()!=='post'||new URL(form.action).origin!==location.origin)return;
+    const form=event.target;if(event.defaultPrevented||!(form instanceof HTMLFormElement)||form.method.toLowerCase()!=='post')return;
+    const action=new URL(form.getAttribute('action')||location.href,location.href);if(action.origin!==location.origin)return;
     event.preventDefault();if(busy)return;busy=true;
     const data=new FormData(form);if(event.submitter?.name)data.append(event.submitter.name,event.submitter.value);
     const buttons=[...form.querySelectorAll('button')],disabled=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);form.setAttribute('aria-busy','true');
-    try{await updatePage(await fetch(form.action,{method:'POST',body:data}));}catch(error){showError(error.message);}finally{buttons.forEach((b,i)=>b.disabled=disabled[i]);form.removeAttribute('aria-busy');busy=false;}
+    try{await updatePage(await fetch(action.href,{method:'POST',body:data}));}catch(error){showError(error.message);}finally{buttons.forEach((b,i)=>b.disabled=disabled[i]);form.removeAttribute('aria-busy');busy=false;}
   });
 
   function fmt(value,digits=1){
@@ -154,7 +155,7 @@ window.TrafficGen = (() => {
         const job=state.job||{};
         document.getElementById('system-job').textContent=state.busy?('Working: '+(job.action||'queued task')+'…'):(job.message||'No administration task yet.');
         if(previous===true&&!state.busy){await refreshPage();return;}previous=state.busy;
-        if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+state.release.tag;
+        if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag);
         if(state.selected)document.getElementById('selected-route').textContent=state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
         if(state.scanned_candidates?.length){
           const body=document.getElementById('gateway-candidates');

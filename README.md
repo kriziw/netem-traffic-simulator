@@ -438,7 +438,7 @@ Compile:
 
 ## Releases
 
-The repository uses **Release Please**.
+The repository uses **Release Please**, with tags and release titles such as `v0.3.1`, matching NetEm. The update worker also accepts the historical `netem-traffic-simulator-vX.Y.Z` tags and displays them as `vX.Y.Z`.
 
 Version state is held in:
 

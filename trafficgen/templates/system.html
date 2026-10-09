@@ -5,7 +5,7 @@
 <div class="page-head"><div><h1>Updates & appliance routing</h1><p>Select the SD-WAN LAN gateway that carries your simulated users. Management routing stays separate.</p></div></div>
 {% if not system.ready %}<div class="flash warning">Run the latest scripts/install-lxc.sh once as root to enable updates and route administration.</div>{% endif %}
 <section class="card"><div class="card-head"><div class="card-title">Stable releases</div></div><div class="card-body">
-<p>Installed: <strong>v{{ app_version }}</strong>. <span id="release-status">{% if system.release.tag %}Latest: {{ system.release.tag }}{% else %}No release check yet.{% endif %}</span></p>
+<p>Installed: <strong>v{{ app_version }}</strong>. <span id="release-status">{% if system.release.tag %}Latest: {{ system.release.display_tag or system.release.tag }}{% else %}No release check yet.{% endif %}</span></p>
 <div class="actions">
 <form method="post" action="{{ url_for('system_action') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="check_update"><button class="btn" {% if not system.ready or system.busy %}disabled{% endif %}>Check for updates</button></form>
 <form method="post" action="{{ url_for('system_action') }}" onsubmit="return confirm('Install the latest stable release and restart the simulator?');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="install_update"><input type="hidden" name="tag" value="{{ system.release.tag or '' }}"><button class="btn primary" id="install-update" {% if not system.ready or system.busy or not system.release.available or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Install update</button></form>
