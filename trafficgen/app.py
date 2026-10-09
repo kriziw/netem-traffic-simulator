@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import copy
 import os
 import hmac
@@ -27,11 +28,14 @@ from .config import (
     ensure_session_secret,
     load_settings,
     rotate_api_key,
+    _write_secret,
 )
 from .database import init_db, query_dem_timeseries, recent_runs
 from .dem import dem_summary
 from .engine import WorkloadController
 from .profiles import profile_payload
+from . import maintenance
+from .network import discover, validate_route, ip_json, VENDORS
 
 
 def create_app():
@@ -73,6 +77,90 @@ def create_app():
             "instance_name": settings.instance_name,
             "controller_status": app.config["TRAFFICGEN_CONTROLLER"].status(),
         }
+
+    def host_available(require_idle=False):
+        if maintenance.status(settings)["busy"]:
+            raise ValueError("Wait for the pending update or routing task to finish.")
+        if require_idle and app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"):
+            raise ValueError("Stop the workload before changing appliance routing or installing an update.")
+
+    def routed_payload(payload):
+        host_available()
+        selected = maintenance.status(settings).get("selected")
+        if selected:
+            try:
+                actual = ip_json("route", "get", selected["target"])[0]
+            except (OSError, ValueError, IndexError) as exc:
+                raise ValueError("Cannot verify the selected appliance route. Verify & select it again.") from exc
+            if actual.get("dev") != selected["interface"] or actual.get("gateway") != selected["gateway"]:
+                raise ValueError("The selected appliance route is missing or changed. Verify & select it again.")
+            payload.setdefault("target", f"http://{selected['target']}:8090")
+            if urlsplit(str(payload.get("target", ""))).hostname != selected["target"]:
+                raise ValueError("Workload target must match the selected appliance's benchmark route.")
+        return payload
+
+    def saved_appliances():
+        rows = maintenance.read_json(settings.runtime_dir / "appliances.json", [])
+        return rows if isinstance(rows, list) else []
+
+    def system_snapshot():
+        state = maintenance.status(settings)
+        try:
+            policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+            state["network"] = discover(policy.get("management_interface", "eth0"))
+            scanned = maintenance.read_json(maintenance.ADMIN_DIR / "discovery.json", {})
+            state["scanned_candidates"] = scanned.get("candidates", [])
+        except (OSError, ValueError) as exc:
+            state["network"] = {"interfaces": [], "candidates": [], "error": str(exc)}
+        state["appliances"] = saved_appliances()
+        return state
+
+    @app.get("/settings/system")
+    @admin_required
+    def system_settings():
+        return render_template("system.html", page="system", system=system_snapshot(), vendors=VENDORS)
+
+    @app.get("/settings/system/data")
+    @admin_required
+    def system_data():
+        return jsonify(system_snapshot())
+
+    @app.post("/settings/system/action")
+    @admin_required
+    def system_action():
+        action = request.form.get("action", "")
+        try:
+            host_available(require_idle=action in ("route", "clear_route", "install_update"))
+            if action == "save_appliance":
+                policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                route = validate_route(dict(request.form), policy.get("management_interface", "eth0"))
+                name = request.form.get("name", "").strip()[:80]
+                vendor = request.form.get("vendor", "Other")
+                if not name or vendor not in VENDORS:
+                    raise ValueError("Provide an appliance name and supported vendor label.")
+                rows = saved_appliances()
+                if len(rows) >= 20:
+                    raise ValueError("Up to 20 appliances can be saved.")
+                rows.append({**route, "name": name, "vendor": vendor, "id": secrets.token_hex(8)})
+                _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
+                flash("Appliance saved. Select it below to verify and apply its traffic route.", "success")
+            elif action == "delete_appliance":
+                rows = [row for row in saved_appliances() if row["id"] != request.form.get("appliance_id")]
+                _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
+                flash("Saved appliance removed. Any active route remains until cleared or changed.", "info")
+            else:
+                payload = {}
+                if action == "route":
+                    payload = next((row for row in saved_appliances() if row["id"] == request.form.get("appliance_id")), None)
+                    if payload is None:
+                        raise ValueError("Choose a saved appliance.")
+                elif action == "install_update":
+                    payload = {"tag": request.form.get("tag", "")}
+                maintenance.enqueue(settings, action, payload)
+                flash("Task queued. Its result will appear below without refreshing the page.", "info")
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("system_settings"))
 
     @app.get("/login")
     def login():
@@ -120,7 +208,7 @@ def create_app():
             page="workloads",
             status=app.config["TRAFFICGEN_CONTROLLER"].status(),
             catalog=profile_payload(),
-            config_default_target=settings.default_target,
+            config_default_target=(f"http://{maintenance.status(settings)['selected']['target']}:8090" if maintenance.status(settings)["selected"] else settings.default_target),
         )
 
     @app.post("/workloads/start")
@@ -135,7 +223,7 @@ def create_app():
             "target": request.form.get("target"),
         }
         try:
-            app.config["TRAFFICGEN_CONTROLLER"].start(payload)
+            app.config["TRAFFICGEN_CONTROLLER"].start(routed_payload(payload))
             flash("Corporate workload started.", "success")
         except (ValueError, RuntimeError) as exc:
             flash(str(exc), "error")
@@ -239,6 +327,26 @@ def create_app():
             rotated=True,
         )
 
+    @app.get("/api/v1/network")
+    @bearer_required
+    def api_network():
+        return jsonify(system_snapshot())
+
+    @app.post("/api/v1/network/select")
+    @bearer_required
+    def api_network_select():
+        try:
+            host_available(require_idle=True)
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, dict):
+                raise ValueError("Request must be an object.")
+            selected = next((row for row in saved_appliances() if row["id"] == data.get("appliance_id")), None)
+            if selected is None:
+                raise ValueError("Choose a saved appliance_id.")
+            return jsonify(maintenance.enqueue(settings, "route", selected)), 202
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
     # ----- Versioned integration API -----
 
     @app.get("/api/v1/health")
@@ -282,7 +390,7 @@ def create_app():
     def api_workload_start():
         try:
             status = app.config["TRAFFICGEN_CONTROLLER"].start(
-                workload_payload()
+                routed_payload(workload_payload())
             )
             return jsonify(status), 201
         except ValueError as exc:

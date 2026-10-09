@@ -72,7 +72,7 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     path.write_text('#!/bin/sh\necho lxc\n')
     path.chmod(0o755)
     path = bin_dir / "python3"
-    path.write_text('#!/bin/sh\nmkdir -p "$3/bin"\nprintf "#!/bin/sh\\nexit 0\\n" > "$3/bin/pip"\nchmod +x "$3/bin/pip"\n')
+    path.write_text('#!/bin/sh\n[ "$1" = "-m" ] || exit 0\nmkdir -p "$3/bin"\nprintf "#!/bin/sh\\nexit 0\\n" > "$3/bin/pip"\nchmod +x "$3/bin/pip"\n')
     path.chmod(0o755)
     environment = dict(os.environ, PATH=str(bin_dir) + ":" + os.environ["PATH"], INSTALL_LOG=str(logfile))
     for _ in range(2):

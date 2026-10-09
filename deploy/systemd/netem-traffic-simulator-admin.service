@@ -1,0 +1,12 @@
+[Unit]
+Description=Constrained simulator updates and benchmark route administration
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/netem-traffic-simulator
+ExecStart=/usr/bin/python3 -I -c "import sys; sys.path.insert(0, '/opt/netem-traffic-simulator'); from trafficgen.host_admin import main; main()"
+TimeoutStartSec=1200
+UMask=0022

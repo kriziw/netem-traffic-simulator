@@ -14,7 +14,7 @@ fi
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync
+apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync git iproute2 iputils-ping curl
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$RUNTIME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -65,8 +65,18 @@ fi
 
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-simulator.service" /etc/systemd/system/netem-traffic-simulator.service
 bash "$APP_DIR/scripts/configure-lxc-service.sh" netem-traffic-simulator
+# Root-owned state lives outside the service-writable runtime/config directories.
+mkdir -p /var/lib/netem-traffic-simulator-admin
+chown root:root /var/lib/netem-traffic-simulator-admin
+chmod 0755 /var/lib/netem-traffic-simulator-admin
+for unit in netem-traffic-simulator-admin.path netem-traffic-simulator-admin.service netem-traffic-simulator-route.service; do
+  install -m 0644 "$APP_DIR/deploy/systemd/$unit" "/etc/systemd/system/$unit"
+done
+python3 -I -c "import sys; sys.path.insert(0, '$APP_DIR'); from trafficgen.host_admin import main; main()" --record-install
 systemctl daemon-reload
 systemctl enable netem-traffic-simulator
+systemctl enable --now netem-traffic-simulator-admin.path
+systemctl enable netem-traffic-simulator-route.service
 systemctl restart netem-traffic-simulator
 systemctl is-active --quiet netem-traffic-simulator
 

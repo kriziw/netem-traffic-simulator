@@ -24,6 +24,7 @@
       <a class="nav-link {% if page == 'dem' %}active{% endif %}" href="{{ url_for('dem_page') }}">Digital Experience</a>
 
       <div class="nav-group">System</div>
+      <a class="nav-link {% if page == 'system' %}active{% endif %}" href="{{ url_for('system_settings') }}">Updates & Appliance Routing</a>
       <a class="nav-link {% if page == 'api' %}active{% endif %}" href="{{ url_for('api_settings') }}">API & Integration</a>
     </nav>
 
@@ -68,6 +69,7 @@
   </main>
 </div>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
-{% block scripts %}{% endblock %}
+<template id="page-scripts">{% block scripts %}{% endblock %}</template>
+<script>TrafficGen.mount();</script>
 </body>
 </html>

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch simulator administration requests
+
+[Path]
+PathExists=/var/lib/netem-traffic-simulator/admin-request.json
+Unit=netem-traffic-simulator-admin.service
+
+[Install]
+WantedBy=multi-user.target
