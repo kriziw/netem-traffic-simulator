@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.6.0...v0.7.0) (2026-10-09)
+
+
+### Features
+
+* add industry applications, personas and run labels ([#22](https://github.com/kriziw/netem-traffic-simulator/issues/22)) ([c5fc10c](https://github.com/kriziw/netem-traffic-simulator/commit/c5fc10ca18c15cc7883d42439a2d41a04d1d040e))
+* explain degraded experience live with causes, per-WAN attribution and media modes ([2d3a3b7](https://github.com/kriziw/netem-traffic-simulator/commit/2d3a3b71f78b20fbd7628846f5da08da7fbf08d0))
+* explain degraded experience live, per WAN, with strict/realistic media judging ([8fd287d](https://github.com/kriziw/netem-traffic-simulator/commit/8fd287d73ac280f67465d7df3efc9beaa8945645))
+* include per-application P95 in the per-WAN experience breakdown ([562d23c](https://github.com/kriziw/netem-traffic-simulator/commit/562d23c2a39c168035ae0f83c655d929d671e9db))
+* report where traffic goes right now for SD-WAN steering checks ([deb81c4](https://github.com/kriziw/netem-traffic-simulator/commit/deb81c498a3ea2798578300d04cd4d148bf53181))
+
+
+### Bug Fixes
+
+* import requests after locust so its ssl monkey-patching stays clean ([f76e0ec](https://github.com/kriziw/netem-traffic-simulator/commit/f76e0ec2a25a8020ebddf3880253edeb95d1cdcc))
+
 ## [0.6.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.5.1...v0.6.0) (2026-10-09)
 
 
