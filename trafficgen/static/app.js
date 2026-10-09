@@ -62,11 +62,18 @@ window.TrafficGen = (() => {
           document.getElementById("dem-users").textContent=payload.users??0;
           document.getElementById("dem-apps").innerHTML=rows(s.applications||{});
           document.getElementById("dem-personas").innerHTML=rows(s.personas||{});
+          document.getElementById("dem-endpoints").innerHTML=endpointRows(s.endpoints||{});
         }
       }catch(_){}
     }
     function rows(items){
       return Object.entries(items).map(([key,item])=>"<tr><td>"+key.replaceAll("_"," ")+"</td><td>"+(item.experience_score??"—")+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+"</td><td>"+(item.p95_ms==null?"—":fmt(item.p95_ms,0)+" ms")+"</td><td>"+item.requests+"</td></tr>").join("");
+    }
+    function endpointRows(items){
+      return Object.values(items)
+        .sort((a,b)=>(a.experience_score??999)-(b.experience_score??999))
+        .slice(0,200)
+        .map(item=>"<tr><td class='mono'>"+item.endpoint_id+"</td><td>"+String(item.persona||"unknown").replaceAll("_"," ")+"</td><td>"+(item.experience_score??"—")+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+"</td><td>"+(item.p95_ms==null?"—":fmt(item.p95_ms,0)+" ms")+"</td><td>"+item.requests+"</td></tr>").join("");
     }
     range.addEventListener("change",load);
     load();
