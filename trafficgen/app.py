@@ -94,6 +94,7 @@ def create_app():
             page="workloads",
             status=app.config["TRAFFICGEN_CONTROLLER"].status(),
             catalog=profile_payload(),
+            config_default_target=settings.default_target,
         )
 
     @app.post("/workloads/start")
@@ -148,6 +149,37 @@ def create_app():
             status=status,
             summary=dem_summary(settings.database_path, run_id=run_id, window_seconds=60),
             runs=recent_runs(settings.database_path, 12),
+        )
+
+    @app.get("/ui/status")
+    @admin_required
+    def ui_status():
+        return jsonify(app.config["TRAFFICGEN_CONTROLLER"].status())
+
+    @app.get("/dem/data")
+    @admin_required
+    def dem_data():
+        try:
+            minutes = max(1, min(1440, int(request.args.get("minutes", "15"))))
+        except ValueError:
+            return {"error": "minutes must be an integer."}, 400
+        status = app.config["TRAFFICGEN_CONTROLLER"].status()
+        run_id = status.get("run", {}).get("run_id") if status.get("run") else None
+        return jsonify(
+            {
+                "timestamp": time.time(),
+                "users": status.get("users", 0),
+                "summary": dem_summary(
+                    settings.database_path,
+                    run_id=run_id,
+                    window_seconds=min(3600, minutes * 60),
+                ),
+                "samples": query_dem_timeseries(
+                    settings.database_path,
+                    time.time() - minutes * 60,
+                    limit=3000,
+                ),
+            }
         )
 
     @app.get("/settings/api")
