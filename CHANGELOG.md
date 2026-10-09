@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/kriziw/netem-traffic-simulator/compare/netem-traffic-simulator-v0.2.1...netem-traffic-simulator-v0.3.0) (2026-10-09)
+
+
+### Features
+
+* add smooth controls, release updates and appliance routing ([5514ff5](https://github.com/kriziw/netem-traffic-simulator/commit/5514ff5547afd19a01a4d5cb400ea23a63c4b550))
+* add smooth controls, release updates and appliance routing ([3303902](https://github.com/kriziw/netem-traffic-simulator/commit/330390222b031a05b493cb63f4a3c75d4c0e9d26))
+
 ## [0.2.1](https://github.com/kriziw/netem-traffic-simulator/compare/netem-traffic-simulator-v0.2.0...netem-traffic-simulator-v0.2.1) (2026-10-09)
 
 
