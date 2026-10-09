@@ -1,0 +1,26 @@
+[Unit]
+Description=NetEm Corporate Traffic Simulator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trafficgen
+Group=trafficgen
+WorkingDirectory=/opt/netem-traffic-simulator
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/netem-traffic-simulator/.venv/bin/python -m trafficgen
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/netem-traffic-simulator /etc/netem-traffic-simulator
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
