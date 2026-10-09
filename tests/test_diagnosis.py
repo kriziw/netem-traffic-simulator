@@ -17,7 +17,7 @@ from trafficgen.database import init_db, query_transactions, record_transaction,
 from trafficgen.dem import dem_summary
 from trafficgen.diagnosis import (MediaFailure, application_detail, classify_error_text, classify_failure,
                                   diagnose, response_details, target_finding)
-from trafficgen.engine import CorporateUser
+from trafficgen.engine import CorporateUser, WorkloadController
 from trafficgen.target import app as target_app, udp_sink
 from trafficgen.wire import ADDRESS_REQUEST, OBSERVED_SOURCE_HEADER
 
@@ -140,7 +140,66 @@ def test_target_finding_only_for_targets_missing_capabilities():
     assert target_finding({"version": "0.7.0", "capabilities": ["media-echo", "observed-source"]}, "0.7.0") is None
     assert target_finding({"error": "unreachable"}, "0.7.0") is None
     finding = target_finding({"version": None, "capabilities": []}, "0.7.0")
-    assert finding["id"] == "target_outdated" and "no version" in finding["detail"]
+    assert finding["id"] == "target_incompatible" and "no version" in finding["detail"]
+
+
+@pytest.mark.parametrize("version, finding_id", [
+    ("0.6.0", "target_outdated"), ("0.7.0", "target_incompatible"),
+    ("v0.7.0", "target_incompatible"), ("0.10.0", "target_incompatible"),
+    (None, "target_incompatible"),
+])
+def test_missing_capabilities_do_not_imply_an_older_version(version, finding_id):
+    finding = target_finding({"version": version, "capabilities": ["media-echo"]}, "0.7.0")
+    assert finding["id"] == finding_id
+    assert "observed-source" in finding["detail"]
+    assert ("older than" in finding["title"]) == (finding_id == "target_outdated")
+
+
+def target_controller():
+    controller = WorkloadController.__new__(WorkloadController)
+    controller.lock = threading.RLock()
+    controller.run = {"run_id": "example", "status": "running"}
+    return controller
+
+
+@pytest.mark.parametrize("status, payload", [
+    (503, {"status": "ok", "service": "netem-traffic-target"}),
+    (302, {"status": "ok", "service": "netem-traffic-target"}),
+    (200, []), (200, {"status": "ok", "service": "other"}),
+])
+def test_failed_or_invalid_health_is_not_an_outdated_target(monkeypatch, status, payload):
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(payload).encode()
+    monkeypatch.setattr("trafficgen.engine.requests.get", lambda *args, **kwargs: response)
+    controller = target_controller()
+    controller._probe_target("example", "http://198.18.0.1:8090")
+    assert controller.run["target_info"]["error"]
+    assert target_finding(controller.run["target_info"], "0.7.0") is None
+
+
+def test_target_upgrade_is_detected_during_the_same_workload(monkeypatch):
+    controller = target_controller()
+    response = requests.Response()
+    response.status_code = 200
+    old = {"status": "ok", "service": "netem-traffic-target", "version": "0.6.0", "capabilities": []}
+    current = {**old, "version": "0.7.0", "capabilities": ["media-echo", "observed-source"]}
+    response._content = json.dumps(old).encode()
+    monkeypatch.setattr("trafficgen.engine.requests.get", lambda *args, **kwargs: response)
+    checks = []
+
+    def advance(seconds):
+        assert seconds == 30
+        checks.append(controller.run["target_info"].copy())
+        response._content = json.dumps(current).encode()
+        if len(checks) == 2:
+            controller.run["status"] = "stopped"
+
+    monkeypatch.setattr("trafficgen.engine.gevent.sleep", advance)
+    controller._monitor_target("example", "http://198.18.0.1:8090")
+    assert target_finding(checks[0], "0.7.0")["id"] == "target_outdated"
+    assert target_finding(checks[1], "0.7.0") is None
+    assert controller.run["run_id"] == "example"
 
 
 def test_target_reports_source_version_and_answers_old_and_new_media_probes():

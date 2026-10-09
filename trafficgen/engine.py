@@ -411,6 +411,7 @@ class WorkloadController:
         self.runner = None
         self.run = None
         self.pattern_greenlet = None
+        self.target_greenlet = None
         self.transaction_queue = queue.Queue(maxsize=50000)
         self.stop_event = threading.Event()
         self.writer_thread = threading.Thread(
@@ -635,19 +636,33 @@ class WorkloadController:
                     "activity": run["activity"],
                 }
 
-            gevent.spawn(self._probe_target, run["run_id"], run["target"])
+            self.target_greenlet = gevent.spawn(self._monitor_target, run["run_id"], run["target"])
             return self.status()
+
+    def _monitor_target(self, run_id: str, target: str):
+        while True:
+            with self.lock:
+                if (not self.run or self.run["run_id"] != run_id
+                        or self.run.get("status") not in ("starting", "running")):
+                    return
+            self._probe_target(run_id, target)
+            gevent.sleep(30)
 
     def _probe_target(self, run_id: str, target: str):
         # An outdated target cannot report the WAN and may not echo media at all.
         info = {"checked_at": time.time(), "version": None, "capabilities": [], "error": None}
         try:
             response = requests.get(target + "/health", timeout=(3, 3), allow_redirects=False)
-            payload = response.json() if response.ok else {}
-            if isinstance(payload, dict):
-                info["version"] = str(payload["version"])[:40] if payload.get("version") else None
-                capabilities = payload.get("capabilities")
-                info["capabilities"] = [str(item)[:40] for item in capabilities][:20] if isinstance(capabilities, list) else []
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError(f"Target health returned HTTP {response.status_code}")
+            payload = response.json()
+            if (not isinstance(payload, dict) or payload.get("status") != "ok"
+                    or payload.get("service") != "netem-traffic-target"):
+                raise ValueError("Response is not a valid controlled-target health report")
+            info["version"] = str(payload["version"])[:40] if payload.get("version") else None
+            capabilities = payload.get("capabilities")
+            info["capabilities"] = [str(item)[:40] for item in capabilities][:20] if isinstance(capabilities, list) else []
         except (requests.RequestException, ValueError) as exc:
             info["error"] = str(exc)[:200]
         with self.lock:
@@ -727,6 +742,9 @@ class WorkloadController:
             run_id = self.run["run_id"]
             self.run["status"] = "stopping"
             runner = self.runner
+        if self.target_greenlet is not None:
+            self.target_greenlet.kill(block=False)
+            self.target_greenlet = None
         if self.pattern_greenlet is not None:
             try:
                 self.pattern_greenlet.kill(block=False)

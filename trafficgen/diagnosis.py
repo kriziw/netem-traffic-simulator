@@ -439,12 +439,19 @@ def target_finding(info, simulator_version):
     if not info or info.get("error") or set(TARGET_CAPABILITIES) <= set(info.get("capabilities") or ()):
         return None
     version = info.get("version")
+    target_match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    simulator_match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(simulator_version))
+    older = bool(target_match and simulator_match
+                 and tuple(map(int, target_match.groups())) < tuple(map(int, simulator_match.groups())))
+    missing = sorted(set(TARGET_CAPABILITIES) - set(info.get("capabilities") or ()))
     return {
-        "id": "target_outdated", "severity": "warn",
-        "title": f"Controlled target is older than the simulator (v{simulator_version})",
-        "detail": f"The target reports {'v' + version if version else 'no version'} and cannot report which WAN "
-                  "carried each transaction, so experience is not split by WAN. Targets before v0.2.1 also do "
-                  "not echo voice/video, which fails every media burst. Update the target with install-target.sh.",
+        "id": "target_outdated" if older else "target_incompatible", "severity": "warn",
+        "title": (f"Controlled target is older than the simulator (v{simulator_version})" if older
+                  else "Controlled target is missing required capabilities"),
+        "detail": f"The target reports {version or 'no version'}; simulator version is {simulator_version}. "
+                  f"Missing capabilities: {', '.join(missing)}. "
+                  "observed-source is needed for per-WAN attribution; media-echo is needed for voice/video replies. "
+                  "Verify /health from the simulator and update the target if required. Health is rechecked every 30 seconds.",
         "applications": [], "affected": 0, "by_egress": {}, "target": info,
     }
 
