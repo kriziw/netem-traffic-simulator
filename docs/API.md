@@ -1,5 +1,24 @@
 # API
 
+## Controlled target management
+
+The optional target manager uses HTTPS port 8091 on the modem management address.
+Every request requires `Authorization: Bearer <target-management-key>`.
+The simulator pins the certificate fingerprint before sending this separate key.
+
+- `GET /api/v1/status` — service/version, update readiness, busy flag, last release check and job result.
+- `POST /api/v1/check` with `{}` — queue a stable release check; returns 202 and `job_id`.
+- `POST /api/v1/update` with `{"tag":"vX.Y.Z"}` — queue the previously checked newer stable release; returns 202 and `job_id`.
+
+Poll status until the matching job ID is completed or failed. The API briefly
+restarts during installation; reconnect using the same certificate and API key.
+Unauthorized requests return 401, malformed/extra parameters return 400, and busy,
+unready or stale release requests return 409. No other management operations,
+custom repositories, command strings or arbitrary URLs are supported.
+
+The simulator's administrator UI proxies these operations through its existing
+root worker; credentials are never sent to the browser in status responses.
+
 The simulator exposes a versioned HTTPS REST API on TCP/8443 by default.
 
 ## Authentication

@@ -1,0 +1,44 @@
+{% set target = system.target %}
+{% set target_release = target.get('release', {}) %}
+{% set target_job = target.get('job', {}) %}
+<section class="card space-top" aria-label="Controlled target updates">
+  <div class="card-head"><div class="card-title">Controlled target updates</div></div>
+  <div class="card-body">
+    <p id="target-status" role="status">{% if target.connected %}Connected to {{ target.host }} · installed v{{ target.version }}{% else %}Connect the update service on your virtual ISP modem.{% endif %}</p>
+    <p id="target-release-status">{% if target_release.tag %}Latest: {{ target_release.display_tag or target_release.tag }} · {{ 'update available' if target_release.available else 'up to date' }}{% else %}No target release check yet.{% endif %}</p>
+    <p id="target-job-status" class="muted" role="status">{{ target_job.message or ('Target task running…' if target.busy else '') }}</p>
+    <div class="actions">
+      {% for action, label in [('target_status', 'Refresh target status'), ('target_check', 'Check target updates')] %}
+      <form method="post" action="{{ url_for('system_action') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="{{ action }}">
+        <button class="btn" data-target-action="{{ action }}" {% if not system.ready or system.busy or not target.connected or (target.busy and action != 'target_status') %}disabled{% endif %}>{{ label }}</button>
+      </form>
+      {% endfor %}
+      <form method="post" action="{{ url_for('system_action') }}" onsubmit="return confirm('Update the controlled target and briefly restart its traffic service?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="target_install">
+        <input type="hidden" name="tag" id="target-release-tag" value="{{ target_release.tag or '' }}">
+        <button class="btn primary" data-target-action="target_install" {% if not system.ready or system.busy or not target.connected or target.busy or not target_release.available or controller_status.status in ('starting','running','stopping') %}disabled{% endif %}>Install target update</button>
+      </form>
+    </div>
+    <p class="muted">Stop workloads before installing. The target installs a stable release, restarts, and verifies its new version. A failed update restores its previous installation. Your simulator stays online while progress appears here.</p>
+    <details class="space-top" {% if not target.connected %}open{% endif %}>
+      <summary>Connect target management</summary>
+      <p class="muted">Enable target management once from the modem console using the target installer. Enter its management address, dedicated API key and certificate fingerprint from that console. The update connection uses the management network separately from simulated WAN traffic.</p>
+      <form method="post" action="{{ url_for('system_action') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="configure_target">
+        <div class="form-grid">
+          <div><label for="target-manager-host">Modem management IPv4</label><input id="target-manager-host" name="host" required value="{{ target.host or '' }}" placeholder="192.168.0.201"></div>
+          <div><label for="target-manager-key">Target management API key</label><input id="target-manager-key" name="api_key" type="password" required autocomplete="new-password"></div>
+          <div><label for="target-manager-fingerprint">Certificate SHA-256 fingerprint</label><input id="target-manager-fingerprint" name="fingerprint" required value="{{ target.fingerprint or '' }}" autocomplete="off"></div>
+        </div>
+        <button class="btn primary space-top" {% if not system.ready or system.busy %}disabled{% endif %}>Connect target</button>
+      </form>
+    </details>
+    {% if target.connected %}
+    <form method="post" action="{{ url_for('system_action') }}" class="space-top">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="disconnect_target">
+      <button class="btn" {% if system.busy or target.busy %}disabled{% endif %}>Disconnect &amp; remove API key</button>
+    </form>
+    {% endif %}
+  </div>
+</section>

@@ -21,8 +21,12 @@ from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config, collect
 from .network import discover, ip_json, run, validate_route, validate_interface, interfaces
 
+TARGET_ROLE = os.environ.get('NETEM_ADMIN_ROLE') == 'target'
 APP_DIR = Path('/opt/netem-traffic-simulator')
-RUNTIME_DIR = Path('/var/lib/netem-traffic-simulator')
+RUNTIME_DIR = Path('/var/lib/netem-traffic-target-manager' if TARGET_ROLE else '/var/lib/netem-traffic-simulator')
+if TARGET_ROLE:
+    ADMIN_DIR = Path('/var/lib/netem-traffic-target-admin')
+SERVICE_NAME = 'netem-traffic-target' if TARGET_ROLE else 'netem-traffic-simulator'
 REPOSITORY = 'https://github.com/kriziw/netem-traffic-simulator.git'
 RELEASE_API = 'https://api.github.com/repos/kriziw/netem-traffic-simulator/releases/latest'
 ROUTE_PROTOCOL = '186'
@@ -97,24 +101,43 @@ def install_release(expected_tag):
         shutil.copytree(APP_DIR, backup, symlinks=True)
         old_manifest = read_json(ADMIN_DIR / 'install-manifest.json')
         units = {}
-        for path in SYSTEMD_DIR.glob('netem-traffic-simulator*'):
+        for path in SYSTEMD_DIR.glob(SERVICE_NAME + '*'):
             if path.is_file() and not path.is_symlink():
                 units[path] = path.read_bytes()
         try:
-            run(['bash', str(source / 'scripts/install-lxc.sh')], timeout=900)
-            run(['systemctl', 'is-active', 'netem-traffic-simulator'], timeout=10)
+            installer = 'install-target.sh' if TARGET_ROLE else 'install-lxc.sh'
+            run(['bash', str(source / 'scripts' / installer)], timeout=900)
+            run(['systemctl', 'is-active', SERVICE_NAME], timeout=10)
+            if TARGET_ROLE:
+                run(['systemctl', 'is-active', 'netem-traffic-target-manager'], timeout=10)
+                for attempt in range(10):
+                    try:
+                        health = json.loads(run(['curl', '--noproxy', '*', '--fail', '--silent', '--show-error',
+                            '--connect-timeout', '5', '--max-time', '10', 'http://127.0.0.1:8090/health'], timeout=12))
+                        break
+                    except (ValueError, OSError):
+                        if attempt == 9:
+                            raise
+                        time.sleep(1)
+                if not isinstance(health, dict) or health.get('service') != 'netem-traffic-target' or version_tuple(str(health.get('version', ''))) != version_tuple(release['tag']):
+                    raise ValueError('Updated target did not report the expected version.')
         except Exception as exc:
             # Restore code and the old venv, leaving secrets and workload history intact.
-            run(['systemctl', 'stop', 'netem-traffic-simulator'], timeout=20)
+            run(['systemctl', 'stop', SERVICE_NAME], timeout=20)
+            if TARGET_ROLE:
+                run(['systemctl', 'stop', 'netem-traffic-target-manager'], timeout=20)
             shutil.rmtree(APP_DIR)
             shutil.copytree(backup, APP_DIR, symlinks=True)
             for path, contents in units.items():
                 path.write_bytes(contents)
             atomic_json(ADMIN_DIR / 'install-manifest.json', old_manifest)
             run(['systemctl', 'daemon-reload'])
-            run(['systemctl', 'restart', 'netem-traffic-simulator'], timeout=30)
+            run(['systemctl', 'restart', SERVICE_NAME], timeout=30)
+            if TARGET_ROLE:
+                run(['systemctl', 'restart', 'netem-traffic-target-manager'], timeout=30)
             raise ValueError('Update failed; previous installation restored. ' + str(exc)) from exc
-    return {'version': release.get('display_tag', release['tag']), 'message': 'Update installed; simulator restarted.'}
+    return {'version': release.get('display_tag', release['tag']),
+            'message': 'Update installed; target restarted.' if TARGET_ROLE else 'Update installed; simulator restarted.'}
 
 
 def exact_routes(target):
@@ -299,6 +322,10 @@ def process_request():
     request_path.unlink(missing_ok=True)
     try:
         payload = job.get('payload', {})
+        if not isinstance(payload, dict):
+            raise ValueError('Administration payload must be an object.')
+        if TARGET_ROLE and job['action'] not in ('check_update', 'install_update'):
+            raise ValueError('Target worker accepts only release checks and installation.')
         if job['action'] == 'check_update':
             result = check_release()
         elif job['action'] == 'install_update':
@@ -317,6 +344,9 @@ def process_request():
             result = forget_interface(payload)
         elif job['action'] == 'clear_route':
             result = clear_route()
+        elif job['action'] in ('configure_target', 'disconnect_target', 'target_status', 'target_check', 'target_install'):
+            from .remote_target import perform
+            result = perform(job['action'], payload, ADMIN_DIR, management())
         else:
             raise ValueError('Unsupported administration action.')
         state.update(state='completed', result=result, message=result.get('message', 'Task completed.'))
