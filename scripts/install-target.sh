@@ -12,7 +12,7 @@ fi
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip
+apt-get install -y python3 python3-venv python3-pip iproute2
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home /nonexistent --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -28,8 +28,13 @@ python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 chown -R root:root "$APP_DIR"
 
+install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target-address.service" /etc/systemd/system/netem-traffic-target-address.service
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target.service" /etc/systemd/system/netem-traffic-target.service
 systemctl daemon-reload
+systemctl enable --now netem-traffic-target-address
 systemctl enable --now netem-traffic-target
 
-echo "Controlled target installed on HTTP/8090 and UDP/9000."
+echo "Controlled target installed."
+echo "Synthetic target IP: 198.18.0.1/32"
+echo "HTTP: http://198.18.0.1:8090"
+echo "UDP media sink: 198.18.0.1:9000"
