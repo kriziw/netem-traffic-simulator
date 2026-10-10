@@ -42,7 +42,8 @@ def test_discovery_survives_non_object_datagrams(simulator):
 
 @pytest.mark.parametrize("installer", ["install-lxc.sh", "install-target.sh"])
 @pytest.mark.parametrize("source_location", ["in-place", "private-source"])
-def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, installer, source_location):
+@pytest.mark.parametrize("target_management", [False, True])
+def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, installer, source_location, target_management):
     # Execute actual scripts twice with system operations replaced by stubs.
     # All absolute write paths are redirected under tmp_path; no host services change.
     source = Path(__file__).resolve().parents[1]
@@ -59,7 +60,17 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
         (config / name).write_text("preserved-" + name)
     units = tmp_path / "units"
     units.mkdir()
+    manager_config = tmp_path / "manager-config"
+    if target_management and installer == "install-target.sh":
+        manager_config.mkdir()
+        (manager_config / "manager.env").write_text("NETEM_TARGET_MANAGER_HOST=192.168.10.20\n")
+        (manager_config / "api.key").write_text("ntt_" + "a" * 64)
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=localhost", "-keyout", str(manager_config / "tls.key"),
+                        "-out", str(manager_config / "tls.crt")], check=True, capture_output=True)
+        old_key = (manager_config / "tls.key").read_bytes()
     script = (source / "scripts" / installer).read_text().replace('/opt/netem-traffic-simulator', str(application)).replace('/etc/netem-traffic-simulator', str(config)).replace('/var/lib/netem-traffic-simulator', str(tmp_path / 'runtime')).replace('/etc/systemd/system', str(units)).replace('if [[ $EUID -ne 0 ]]; then', 'if false; then')
+    script = script.replace('/etc/netem-traffic-target-manager', str(manager_config)).replace('/var/lib/netem-traffic-target-manager', str(tmp_path / 'manager-runtime')).replace('/var/lib/netem-traffic-target-admin', str(tmp_path / 'target-admin'))
     (installation_source / "scripts" / installer).write_text(script)
     helper = (source / "scripts/configure-lxc-service.sh").read_text().replace('/etc/systemd/system', str(units))
     (installation_source / "scripts/configure-lxc-service.sh").write_text(helper)
@@ -84,5 +95,11 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     assert (config / "api.key").read_text() == "preserved-api.key"
     assert (config / "tls.key").read_text() == "preserved-tls.key"
     service = "netem-traffic-simulator" if installer == "install-lxc.sh" else "netem-traffic-target"
-    assert logfile.read_text().count("restart " + service) == 2
+    assert logfile.read_text().splitlines().count(str(bin_dir / 'systemctl') + " restart " + service) == 2
     assert "ProtectSystem=false" in (units / (service + ".service.d") / "10-lxc.conf").read_text()
+    if target_management and installer == "install-target.sh":
+        assert (manager_config / "api.key").read_text() == "ntt_" + "a" * 64
+        assert (manager_config / "tls.key").read_bytes() == old_key
+        assert (manager_config / "manager.env").read_text() == "NETEM_TARGET_MANAGER_HOST=192.168.10.20\n"
+        assert (units / "netem-traffic-target-manager.service").exists()
+        assert "enable --now netem-traffic-target-admin.path" in logfile.read_text()

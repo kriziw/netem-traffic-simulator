@@ -1,0 +1,13 @@
+[Unit]
+Description=Controlled target stable release update worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/netem-traffic-simulator
+Environment=NETEM_ADMIN_ROLE=target
+ExecStart=/usr/bin/python3 -I -c "import sys; sys.path.insert(0, '/opt/netem-traffic-simulator'); from trafficgen.host_admin import main; main()"
+TimeoutStartSec=1200
+UMask=0022
