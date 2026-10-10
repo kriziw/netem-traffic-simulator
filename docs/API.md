@@ -19,6 +19,14 @@ custom repositories, command strings or arbitrary URLs are supported.
 The simulator's administrator UI proxies these operations through its existing
 root worker; credentials are never sent to the browser in status responses.
 
+## Controlled-target UDP replies
+
+The controlled target echoes media from the exact IP address and UDP port contacted by the simulator. On Linux, wildcard listeners use per-datagram IPv4/IPv6 packet info; HTTP and UDP can continue listening on all interfaces, including when the benchmark address is assigned to loopback on a multi-interface ISP router. The incoming interface is not forced onto the return route for globally scoped addresses. IPv6 link-local replies retain their interface scope.
+
+The simulator retains connected UDP sockets and nonce/sequence validation. Accepting replies from arbitrary target addresses would hide endpoint and routing mistakes rather than fix them. Legacy 12-byte echoes and observed-source extensions remain unchanged. If packet-info support is unavailable, wildcard UDP binding fails startup instead of silently answering from an incorrect address; an explicit local `--host` bind remains supported.
+
+After installing this fix, remove only the temporary `20-benchmark-bind.conf` workaround if you created it, then run `systemctl daemon-reload` and restart `netem-traffic-target`. Preserve any other service overrides. Verify with a UDP/9000 packet capture that requests to `198.18.0.1` receive replies from `198.18.0.1`, then run voice/video workloads through each WAN and check the reported observed-source addresses. This is a target-side update; updating only the simulator does not change target socket behavior.
+
 The simulator exposes a versioned HTTPS REST API on TCP/8443 by default.
 
 ## Authentication
