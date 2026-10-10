@@ -33,6 +33,7 @@ chown -R root:root "$APP_DIR"
 chmod 0755 "$APP_DIR"
 
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target-address.service" /etc/systemd/system/netem-traffic-target-address.service
+bash "$APP_DIR/scripts/ensure-time-sync.sh"
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-target.service" /etc/systemd/system/netem-traffic-target.service
 bash "$APP_DIR/scripts/configure-lxc-service.sh" netem-traffic-target
 systemctl daemon-reload

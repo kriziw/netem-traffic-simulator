@@ -467,6 +467,45 @@ def test_readiness_and_repair_api(simulator, tmp_path, monkeypatch):
             assert client.post('/api/v1/network/repair', headers=headers).json['repair'] == 'not_needed'
 
 
+def test_health_reports_time_and_target_offset(simulator, monkeypatch):
+    from trafficgen import app as app_module
+    monkeypatch.setattr(app_module, 'host_clock', lambda: {'ntp': True, 'synchronized': True, 'container': True})
+    monkeypatch.setitem(app_module.TARGET_CLOCK, 'offset_s', None)
+    monkeypatch.setitem(app_module.TARGET_CLOCK, 'checked', None)
+
+    class Answer:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(self.body).encode()
+
+    class Opener:
+        def open(self, url, timeout):
+            return Answer({'service': 'netem-traffic-target', 'time': 1004.0})
+
+    monkeypatch.setattr(app_module, 'build_opener', lambda *handlers: Opener())
+    times = iter([1000.0, 1000.2])
+    monkeypatch.setattr(app_module.time, 'time', lambda: next(times, 1000.2))
+    assert app_module.target_health('198.18.0.1')[0]
+    assert app_module.TARGET_CLOCK['offset_s'] == 3.9
+    health = simulator.test_client().get('/api/v1/health').json
+    assert health['time'] == 1000.2
+    assert health['clock'] == {'ntp': True, 'synchronized': True, 'container': True, 'target_offset_s': 3.9}
+
+
+def test_target_health_reports_its_time():
+    from trafficgen import target
+    body = target.app.test_client().get('/health').json
+    assert body['service'] == 'netem-traffic-target' and isinstance(body['time'], float)
+
+
 def test_watchdog_repairs_only_saved_routes_and_backs_off(simulator):
     from trafficgen import app as app_module
     events = []

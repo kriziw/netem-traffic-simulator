@@ -6,6 +6,7 @@ import copy
 import os
 import hmac
 import secrets
+import subprocess
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 import time
@@ -51,15 +52,49 @@ def target_egress(host):
         return None
 
 
+# The target's clock offset from this simulator, from its last health check (positive: ahead).
+TARGET_CLOCK = {"offset_s": None, "checked": None}
+HOST_CLOCK = {"value": None, "checked": None}
+
+
+def host_clock():
+    """This host's NTP state, read at most once a minute. A container shares its host's clock."""
+    if HOST_CLOCK["checked"] is not None and time.monotonic() - HOST_CLOCK["checked"] < 60:
+        return HOST_CLOCK["value"]
+    value = {"ntp": None, "synchronized": None, "container": None}
+    try:
+        shown = subprocess.run(["timedatectl", "show", "--property=NTP", "--property=NTPSynchronized"],
+                               capture_output=True, text=True, timeout=5, check=False)
+        flags = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line) if shown.returncode == 0 else {}
+        value.update(ntp=flags["NTP"] == "yes" if "NTP" in flags else None,
+                     synchronized=flags["NTPSynchronized"] == "yes" if "NTPSynchronized" in flags else None)
+        virt = subprocess.run(["systemd-detect-virt", "--container"], capture_output=True, text=True, timeout=5, check=False)
+        value["container"] = virt.stdout.strip() not in ("", "none")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    HOST_CLOCK.update(value=value, checked=time.monotonic())
+    return value
+
+
+def clock_report():
+    """What NetEm needs to compare clocks: this host's time sync and the target's recent offset."""
+    recent = TARGET_CLOCK["checked"] is not None and time.monotonic() - TARGET_CLOCK["checked"] < 900
+    return dict(host_clock(), target_offset_s=TARGET_CLOCK["offset_s"] if recent else None)
+
+
 def target_health(host):
     """Ask the controlled target's health endpoint over the current route, never through a proxy."""
+    sent = time.time()
     try:
         with build_opener(ProxyHandler({})).open(f"http://{host}:8090/health", timeout=3) as response:
             body = json.loads(response.read(4096) or b"{}")
     except (OSError, ValueError) as exc:
         return False, f"The controlled target at {host} did not answer ({exc})."
+    received = time.time()
     if not isinstance(body, dict) or body.get("service") != "netem-traffic-target":
         return False, f"{host} answered, but not as the controlled target."
+    if isinstance(body.get("time"), (int, float)):
+        TARGET_CLOCK.update(offset_s=round(body["time"] - (sent + received) / 2, 2), checked=time.monotonic())
     return True, f"The controlled target at {host} answers through this path."
 
 
@@ -503,6 +538,9 @@ def create_app():
             "api_version": "v1",
             "status": "ok",
             "instance_name": settings.instance_name,
+            # NetEm compares this with its own clock; components must agree on the time.
+            "time": time.time(),
+            "clock": clock_report(),
         }
 
     @app.get("/api/v1/status")

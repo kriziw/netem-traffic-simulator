@@ -13,6 +13,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 from flask import Flask, Response, jsonify, request
 
 from . import __version__
@@ -50,7 +51,7 @@ def byte_stream(size_bytes, chunk=65536):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "netem-traffic-target", "version": __version__,
-            "capabilities": ["media-echo", "observed-source"]}
+            "capabilities": ["media-echo", "observed-source"], "time": time.time()}
 
 
 @app.get("/web/page")

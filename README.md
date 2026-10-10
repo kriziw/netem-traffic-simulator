@@ -580,6 +580,8 @@ Without a saved route it selects the appliance only when exactly one is saved. S
 
 The simulator also repairs a lost saved route by itself. Every 30 seconds it checks the path, and it queues a repair at most every two minutes when a reboot or link flap removed the route. It never selects an appliance on its own. NetEm uses the same endpoints to check the path, and repair it, before it starts traffic.
 
+NetEm, the simulator and the target compare timestamps, so keep their clocks on a time server. The installers turn on time sync on VMs. A container uses its Proxmox host's clock, so keep the host on NTP. The simulator reports its clock and the target's offset to NetEm, which warns when they drift.
+
 If a Proxmox LXC data NIC comes up down after a reboot even though its IPv4 is static, check its IPv6 setting. **DHCP** or **SLAAC** without a DHCPv6 server can stall the container's networking service before it configures the NIC. Set IPv6 to **Static** with an empty address on NICs that do not use IPv6.
 
 **Stop restoring** removes only the simulator's saved boot configuration; it does not remove a live address or route. For installations where Proxmox owns static addressing, configure the same address there and stop simulator restoration to avoid conflicting ownership. The simulator cannot add Proxmox NICs or fix a host bridge/link-down setting; those remain Proxmox tasks.

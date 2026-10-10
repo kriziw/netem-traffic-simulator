@@ -29,6 +29,10 @@ After installing this fix, remove only the temporary `20-benchmark-bind.conf` wo
 
 The simulator exposes a versioned HTTPS REST API on TCP/8443 by default.
 
+## Clock
+
+`GET /api/v1/health` also returns `time`, this host's Unix time, and `clock`: `ntp` (time sync on), `synchronized`, `container` (true when the clock is the container host's) and `target_offset_s` (the controlled target's clock offset from this simulator at its last health check, positive when ahead). NetEm uses these to check that all components agree on the time. The target's `/health` returns its `time`.
+
 ## Traffic path readiness
 
 - `GET /api/v1/network/readiness` returns:
