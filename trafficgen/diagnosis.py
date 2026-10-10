@@ -451,7 +451,8 @@ def target_finding(info, simulator_version):
         "detail": f"The target reports {version or 'no version'}; simulator version is {simulator_version}. "
                   f"Missing capabilities: {', '.join(missing)}. "
                   "observed-source is needed for per-WAN attribution; media-echo is needed for voice/video replies. "
-                  "Verify /health from the simulator and update the target if required. Health is rechecked every 30 seconds.",
+                  "Update the target from Updates & Appliance Routing → Controlled target updates (or rerun install-target.sh "
+                  "on the target), then verify /health. Health is rechecked every 30 seconds.",
         "applications": [], "affected": 0, "by_egress": {}, "target": info,
     }
 

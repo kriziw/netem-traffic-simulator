@@ -86,6 +86,16 @@ class Client:
                 sock.close()
 
 
+def compare_versions(target_version, simulator_version):
+    """How the connected target relates to this simulator; they must run the same release."""
+    try:
+        target, simulator = version_tuple(str(target_version)), version_tuple(str(simulator_version))
+    except (TypeError, ValueError):
+        return {"simulator_version": simulator_version, "version_match": None}
+    return {"simulator_version": simulator_version, "version_match": target == simulator,
+            "behind_simulator": target < simulator}
+
+
 def public_status(data, config):
     if data.get('service') != SERVICE:
         raise ValueError('The management address did not reach a controlled target manager.')

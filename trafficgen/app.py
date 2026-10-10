@@ -117,6 +117,7 @@ def create_app():
         state = maintenance.status(settings)
         state["target"] = maintenance.read_json(maintenance.ADMIN_DIR / remote_target.STATUS_FILE,
                                                {"connected": False, "release": {}, "job": {}})
+        state["target"].update(remote_target.compare_versions(state["target"].get("version"), __version__))
         state["workload_active"] = app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping")
         try:
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})

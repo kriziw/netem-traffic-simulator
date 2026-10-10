@@ -261,6 +261,13 @@ window.TrafficGen = (() => {
     const target=state.target||{},release=target.release||{},job=target.job||{};
     const status=document.getElementById('target-status');if(!status)return;
     status.textContent=target.connected?'Connected to '+target.host+' · installed v'+target.version:'Connect the update service on your virtual ISP modem.';
+    const match=document.getElementById('target-version-match');
+    if(match){
+      const mismatch=target.connected&&target.version_match===false;
+      match.className=mismatch?'warning':'muted';
+      match.textContent=mismatch?'This simulator runs v'+target.simulator_version+'. '+(target.behind_simulator?'Update the target to the same release: ':'The target runs a newer release; update the simulator to match: ')+'per-WAN attribution and voice/video replies depend on matching versions.'
+        :(target.connected&&target.version_match?'Matches this simulator (v'+target.simulator_version+').':'');
+    }
     document.getElementById('target-release-status').textContent=release.tag?'Latest: '+(release.display_tag||release.tag)+(release.available?' · update available':' · up to date'):'No target release check yet.';
     document.getElementById('target-job-status').textContent=target.busy?'Target task running…':(job.message||'');
     document.getElementById('target-release-tag').value=release.tag||'';
