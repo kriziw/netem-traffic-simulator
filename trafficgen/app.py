@@ -6,7 +6,9 @@ import copy
 import os
 import hmac
 import secrets
+import subprocess
 from urllib.parse import urlsplit
+from urllib.request import ProxyHandler, build_opener
 import time
 
 from flask import (
@@ -39,7 +41,82 @@ from . import maintenance
 from . import remote_target
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
-from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface
+from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness
+
+
+def target_egress(host):
+    """The kernel's route to a workload target, or None when it cannot be looked up."""
+    try:
+        return ip_json("route", "get", host)[0]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+# The target's clock offset from this simulator, from its last health check (positive: ahead).
+TARGET_CLOCK = {"offset_s": None, "checked": None}
+HOST_CLOCK = {"value": None, "checked": None}
+
+
+def host_clock():
+    """This host's NTP state, read at most once a minute. A container shares its host's clock."""
+    if HOST_CLOCK["checked"] is not None and time.monotonic() - HOST_CLOCK["checked"] < 60:
+        return HOST_CLOCK["value"]
+    value = {"ntp": None, "synchronized": None, "container": None}
+    try:
+        shown = subprocess.run(["timedatectl", "show", "--property=NTP", "--property=NTPSynchronized"],
+                               capture_output=True, text=True, timeout=5, check=False)
+        flags = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line) if shown.returncode == 0 else {}
+        value.update(ntp=flags["NTP"] == "yes" if "NTP" in flags else None,
+                     synchronized=flags["NTPSynchronized"] == "yes" if "NTPSynchronized" in flags else None)
+        virt = subprocess.run(["systemd-detect-virt", "--container"], capture_output=True, text=True, timeout=5, check=False)
+        value["container"] = virt.stdout.strip() not in ("", "none")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    HOST_CLOCK.update(value=value, checked=time.monotonic())
+    return value
+
+
+def clock_report():
+    """What NetEm needs to compare clocks: this host's time sync and the target's recent offset."""
+    recent = TARGET_CLOCK["checked"] is not None and time.monotonic() - TARGET_CLOCK["checked"] < 900
+    return dict(host_clock(), target_offset_s=TARGET_CLOCK["offset_s"] if recent else None)
+
+
+def target_health(host):
+    """Ask the controlled target's health endpoint over the current route, never through a proxy."""
+    sent = time.time()
+    try:
+        with build_opener(ProxyHandler({})).open(f"http://{host}:8090/health", timeout=3) as response:
+            body = json.loads(response.read(4096) or b"{}")
+    except (OSError, ValueError) as exc:
+        return False, f"The controlled target at {host} did not answer ({exc})."
+    received = time.time()
+    if not isinstance(body, dict) or body.get("service") != "netem-traffic-target":
+        return False, f"{host} answered, but not as the controlled target."
+    if isinstance(body.get("time"), (int, float)):
+        TARGET_CLOCK.update(offset_s=round(body["time"] - (sent + received) / 2, 2), checked=time.monotonic())
+    return True, f"The controlled target at {host} answers through this path."
+
+
+def path_watchdog(application, stop_event, first=15, interval=30, backoff=120, log=print):
+    """Restore a saved appliance route that disappeared (reboot, link flap) without an operator.
+    It only repairs a route the operator selected; it never picks an appliance by itself."""
+    last, delay, reported = None, first, None
+    while not stop_event.wait(delay):
+        delay = interval
+        try:
+            readiness = application.config["TRAFFICGEN_NETWORK_READINESS"](check_target=False)
+            due = last is None or time.monotonic() - last >= backoff
+            if (not readiness["ready"] and readiness["repairable"] and readiness.get("saved_route")
+                    and not readiness.get("busy") and due):
+                last = time.monotonic()
+                application.config["TRAFFICGEN_REPAIR"]()
+                log("Traffic path lost; automatic repair queued: " + readiness["message"])
+            reported = None
+        except Exception as exc:
+            if str(exc) != reported:
+                reported = str(exc)
+                log("Traffic path watchdog: " + reported)
 
 
 def create_app():
@@ -88,9 +165,22 @@ def create_app():
         if require_idle and app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"):
             raise ValueError("Stop the workload before changing appliance routing or installing an update.")
 
+    def management_interface():
+        return maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {}).get("management_interface", "eth0")
+
     def routed_payload(payload):
         host_available()
         selected = maintenance.status(settings).get("selected")
+        if not selected:
+            # Without an appliance route a data-NIC simulator would reach the target over management,
+            # around the appliance and NetEm: every result would be meaningless.
+            host = urlsplit(str(payload.get("target") or settings.default_target)).hostname or ""
+            management = management_interface()
+            egress = target_egress(host)
+            if egress and egress.get("dev") == management and interfaces(management):
+                raise ValueError(f"No appliance route is selected, so traffic to {host} would leave through the management "
+                                 f"interface ({management}) and bypass the appliance. Select an appliance under Updates & "
+                                 "Appliance Routing, or repair the traffic path.")
         if selected:
             try:
                 actual = ip_json("route", "get", selected["target"])[0]
@@ -113,6 +203,32 @@ def create_app():
         rows = maintenance.read_json(settings.runtime_dir / "appliances.json", [])
         return rows if isinstance(rows, list) else []
 
+    def network_readiness(check_target=True, inventory=None):
+        """Whether workloads reach the controlled target through the appliance right now."""
+        state = maintenance.status(settings)
+        management = management_interface()
+        rows = inventory if inventory is not None else interfaces(management)
+        result = path_readiness(state.get("selected"), management, rows, urlsplit(settings.default_target).hostname or "198.18.0.1",
+                                state.get("interface_configs"), saved_appliances())
+        result.update(busy=state["busy"], job=state.get("job") or {}, checked_at=time.time())
+        if check_target and result["ready"]:
+            ok, message = target_health(result["path"]["target"])
+            result["target"] = {"ok": ok, "message": message}
+            if not ok:
+                result.update(ready=False, message=message + " The route is in place: check the appliance policy and its WAN links.")
+        return result
+
+    def enqueue_repair():
+        host_available()
+        readiness = network_readiness(check_target=False)
+        if not readiness["repairable"]:
+            raise ValueError(readiness["message"] if not readiness["ready"] else "The traffic path is already in place.")
+        selected = maintenance.status(settings).get("selected")
+        return maintenance.enqueue(settings, "repair", {} if selected else {"appliance": saved_appliances()[0]})
+
+    app.config["TRAFFICGEN_NETWORK_READINESS"] = network_readiness
+    app.config["TRAFFICGEN_REPAIR"] = enqueue_repair
+
     def system_snapshot():
         state = maintenance.status(settings)
         state["target"] = maintenance.read_json(maintenance.ADMIN_DIR / remote_target.STATUS_FILE,
@@ -123,6 +239,7 @@ def create_app():
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
             state["network"] = discover(policy.get("management_interface", "eth0"))
             state["route_health"] = route_status(state.get("selected"), policy.get("management_interface", "eth0"), state["network"]["interfaces"])
+            state["readiness"] = network_readiness(check_target=False, inventory=state["network"]["interfaces"])
             inventory = maintenance.read_json(maintenance.ADMIN_DIR / "proxmox-inventory.json", {})
             state["network"]["candidates"] = enrich_candidates(state["network"]["candidates"], state["network"]["interfaces"], inventory)
             scanned = maintenance.read_json(maintenance.ADMIN_DIR / "discovery.json", {})
@@ -134,6 +251,8 @@ def create_app():
         except (OSError, ValueError) as exc:
             state["network"] = {"interfaces": [], "candidates": [], "error": str(exc)}
             state["route_health"] = {"state": "error", "active": False, "message": "Cannot inspect live network state: " + str(exc)}
+            state["readiness"] = {"ready": False, "repairable": False, "saved_route": bool(state.get("selected")),
+                                  "message": "Cannot inspect live network state: " + str(exc)}
         state["appliances"] = saved_appliances()
         return state
 
@@ -167,6 +286,9 @@ def create_app():
                 rows.append({**route, "name": name, "vendor": vendor, "model": request.form.get("model", "")[:80], "firmware": request.form.get("firmware", "")[:40], "id": secrets.token_hex(8)})
                 _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
                 flash("Appliance saved. Select it below to verify and apply its traffic route.", "success")
+            elif action == "repair":
+                enqueue_repair()
+                flash("Repair queued: restoring the data interface and the appliance route, then checking the target.", "info")
             elif action == "delete_appliance":
                 rows = [row for row in saved_appliances() if row["id"] != request.form.get("appliance_id")]
                 _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
@@ -375,6 +497,22 @@ def create_app():
     def api_network():
         return jsonify(system_snapshot())
 
+    @app.get("/api/v1/network/readiness")
+    @bearer_required
+    def api_network_readiness():
+        return jsonify(network_readiness())
+
+    @app.post("/api/v1/network/repair")
+    @bearer_required
+    def api_network_repair():
+        try:
+            readiness = network_readiness(check_target=False)
+            if readiness["ready"]:
+                return jsonify({"repair": "not_needed", "readiness": readiness}), 200
+            return jsonify(enqueue_repair()), 202
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
     @app.post("/api/v1/network/select")
     @bearer_required
     def api_network_select():
@@ -400,6 +538,9 @@ def create_app():
             "api_version": "v1",
             "status": "ok",
             "instance_name": settings.instance_name,
+            # NetEm compares this with its own clock; components must agree on the time.
+            "time": time.time(),
+            "clock": clock_report(),
         }
 
     @app.get("/api/v1/status")

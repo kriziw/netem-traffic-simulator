@@ -66,6 +66,7 @@ if [[ ! -s "$CONFIG_DIR/tls.crt" || ! -s "$CONFIG_DIR/tls.key" ]]; then
   chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls.key" "$CONFIG_DIR/tls.crt"
 fi
 
+bash "$APP_DIR/scripts/ensure-time-sync.sh"
 install -m 0644 "$APP_DIR/deploy/systemd/netem-traffic-simulator.service" /etc/systemd/system/netem-traffic-simulator.service
 bash "$APP_DIR/scripts/configure-lxc-service.sh" netem-traffic-simulator
 # Root-owned state lives outside the service-writable runtime/config directories.

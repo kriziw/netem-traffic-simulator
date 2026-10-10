@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 from .maintenance import ADMIN_DIR, read_json, version_tuple
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config, collect
-from .network import discover, ip_json, run, validate_route, validate_interface, interfaces
+from .network import address_table, discover, ip_json, run, validate_route, validate_interface, interfaces
 
 TARGET_ROLE = os.environ.get('NETEM_ADMIN_ROLE') == 'target'
 APP_DIR = Path('/opt/netem-traffic-simulator')
@@ -202,7 +202,7 @@ def configure_interface(payload, persist=True):
     saved = read_json(ADMIN_DIR / 'interfaces.json', {})
     if name in saved and saved[name] != config:
         raise ValueError('Stop restoring the old saved interface configuration before changing it.')
-    link = next(r for r in ip_json('address', 'show') if r.get('ifname', '').split('@')[0] == name)
+    link = next(r for r in address_table() if r.get('ifname', '').split('@')[0] == name)
     was_up = 'UP' in link.get('flags', [])
     had_address = any(a.get('family') == 'inet' and f"{a['local']}/{a['prefixlen']}" == config['address'] for a in link.get('addr_info', []))
     added = False
@@ -235,21 +235,42 @@ def forget_interface(payload):
     return {'message': 'Boot restoration removed. Current addresses and routing are unchanged.'}
 
 
-def restore_network():
+def restore_path(route, verify):
+    """Bring saved data interfaces up with their addresses, then apply the appliance route.
+    A route saved with its interface address can restore a NIC that came up without one."""
+    configs = dict(read_json(ADMIN_DIR / 'interfaces.json', {}) or {})
+    if route and route.get('address'):
+        configs.setdefault(route['interface'], {'interface': route['interface'], 'address': route['address']})
     failures = []
-    for config in read_json(ADMIN_DIR / 'interfaces.json', {}).values():
+    for config in configs.values():
         try:
             configure_interface(config, persist=False)
         except Exception as exc:
             failures.append(str(exc))
-    route = read_json(ADMIN_DIR / 'route.json')
     if route:
         try:
-            apply_route(route, verify=False)
+            apply_route(route, verify=verify)
         except Exception as exc:
             failures.append(str(exc))
+    return failures
+
+
+def restore_network():
+    failures = restore_path(read_json(ADMIN_DIR / 'route.json'), verify=False)
     if failures:
         raise ValueError('; '.join(failures))
+
+
+def repair_network(payload):
+    """Put the traffic path back and check the target answers through it. Without a saved
+    route, select the one saved appliance the caller passed."""
+    route = read_json(ADMIN_DIR / 'route.json') or payload.get('appliance')
+    if not route:
+        raise ValueError('No appliance route is saved. Select an appliance first.')
+    failures = restore_path(route, verify=True)
+    if failures:
+        raise ValueError('; '.join(failures))
+    return {'message': f"Traffic path restored: {route['target']} via {route['gateway']} on {route['interface']}; the target answers."}
 
 
 def inventory_configure(payload):
@@ -344,6 +365,8 @@ def process_request():
             result = forget_interface(payload)
         elif job['action'] == 'clear_route':
             result = clear_route()
+        elif job['action'] == 'repair':
+            result = repair_network(payload)
         elif job['action'] in ('configure_target', 'disconnect_target', 'target_status', 'target_check', 'target_install'):
             from .remote_target import perform
             result = perform(job['action'], payload, ADMIN_DIR, management())

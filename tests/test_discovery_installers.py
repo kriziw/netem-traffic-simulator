@@ -74,6 +74,7 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     (installation_source / "scripts" / installer).write_text(script)
     helper = (source / "scripts/configure-lxc-service.sh").read_text().replace('/etc/systemd/system', str(units))
     (installation_source / "scripts/configure-lxc-service.sh").write_text(helper)
+    shutil.copy(source / "scripts/ensure-time-sync.sh", installation_source / "scripts/ensure-time-sync.sh")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     logfile = tmp_path / "calls"
@@ -97,6 +98,8 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     service = "netem-traffic-simulator" if installer == "install-lxc.sh" else "netem-traffic-target"
     assert logfile.read_text().splitlines().count(str(bin_dir / 'systemctl') + " restart " + service) == 2
     assert "ProtectSystem=false" in (units / (service + ".service.d") / "10-lxc.conf").read_text()
+    # In a container the clock is the host's: the installer must not try to change time sync.
+    assert "systemd-timesyncd" not in logfile.read_text()
     if target_management and installer == "install-target.sh":
         assert (manager_config / "api.key").read_text() == "ntt_" + "a" * 64
         assert (manager_config / "tls.key").read_bytes() == old_key

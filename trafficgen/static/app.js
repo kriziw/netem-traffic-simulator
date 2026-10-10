@@ -296,6 +296,9 @@ window.TrafficGen = (() => {
         if(previous===true&&!state.busy){await refreshPage();return;}previous=state.busy;
         if(state.release.tag)document.getElementById('release-status').textContent='Latest: '+(state.release.display_tag||state.release.tag)+(state.release.available?' · update available':' · up to date');
         const health=document.getElementById('route-health');if(health&&state.route_health){health.textContent=state.route_health.message;health.classList.toggle('error',state.route_health.state==='error');}
+        const readiness=document.getElementById('path-readiness'),repair=document.getElementById('path-repair');
+        if(readiness&&state.readiness){readiness.textContent=state.readiness.message;readiness.hidden=state.readiness.ready||state.readiness.saved_route;}
+        if(repair&&state.readiness)repair.hidden=!state.readiness.repairable;
         if(state.selected)document.getElementById('selected-route').textContent='Saved selection: '+state.selected.target+' → '+state.selected.gateway+' via '+state.selected.interface;
         const select=document.getElementById('detected-appliance');
         if(select && !select.matches(':focus')){

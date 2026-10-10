@@ -548,7 +548,7 @@ to install the new privileged-worker actions. On targets where remote management
 has not been enabled, console updates with `scripts/install-target.sh` continue
 to work as before.
 
-Integration clients can inspect `GET /api/v1/network` and select an existing saved appliance with authenticated `POST /api/v1/network/select` and `{"appliance_id":"..."}`. Selection returns `202` with a job ID; poll the network endpoint until that job completes or fails before starting a workload. Network controls require the same Bearer API key as workload controls. GUI controls retain administrator login and CSRF checks.
+Integration clients can inspect `GET /api/v1/network`, check `GET /api/v1/network/readiness`, repair the path with `POST /api/v1/network/repair`, and select an existing saved appliance with authenticated `POST /api/v1/network/select` and `{"appliance_id":"..."}`. Selection returns `202` with a job ID; poll the network endpoint until that job completes or fails before starting a workload. Network controls require the same Bearer API key as workload controls. GUI controls retain administrator login and CSRF checks.
 
 Diagnostics:
 
@@ -563,6 +563,26 @@ ip route get 198.18.0.1
 The routing page lists down and unaddressed data NICs and checks the saved route against current interface/address/kernel-route state. A saved selection is not presented as proof of an active path. Missing, down, unaddressed, no-carrier and mismatched routes show an actionable error, refreshed while the page is open.
 
 Stop the workload, choose a data NIC, enter the simulator LAN address with its prefix (for example `eth1`, `10.250.10.10/24`), and click **Enable & save interface**. The root worker brings it up and adds that address without changing management or a default gateway. It saves this configuration outside the service-writable directories and reapplies it at boot before the benchmark route. Existing different addressing and overlap with management are rejected. **Verify & select** then checks target health through the appliance.
+
+### Traffic path readiness and automatic repair
+
+Before every workload the simulator checks that test traffic will reach the controlled target **through the appliance**:
+
+- With a selected appliance, the data interface must be up with its address and the kernel must route the target via that appliance.
+- Without a selected appliance, a simulator that has a data NIC refuses to start when the target route leaves through the management interface. Such traffic would bypass the appliance and NetEm, so every result would be meaningless. A single-NIC simulator, which reaches the appliance through eth0, is unaffected.
+
+`GET /api/v1/network/readiness` reports whether the path is ready, why not, and whether the simulator can repair it. When the path is in place, it also asks the target's health endpoint. **Repair traffic path** in the GUI, or `POST /api/v1/network/repair`, does the following:
+1. Brings the data interface up with its saved address.
+2. Restores the selected appliance route.
+3. Checks that the target answers through it.
+
+Without a saved route it selects the appliance only when exactly one is saved. Selecting an appliance now also saves the interface's address, so a NIC that Proxmox later brings up without its address can be restored.
+
+The simulator also repairs a lost saved route by itself. Every 30 seconds it checks the path, and it queues a repair at most every two minutes when a reboot or link flap removed the route. It never selects an appliance on its own. NetEm uses the same endpoints to check the path, and repair it, before it starts traffic.
+
+NetEm, the simulator and the target compare timestamps, so keep their clocks on a time server. The installers turn on time sync on VMs. A container uses its Proxmox host's clock, so keep the host on NTP. The simulator reports its clock and the target's offset to NetEm, which warns when they drift.
+
+If a Proxmox LXC data NIC comes up down after a reboot even though its IPv4 is static, check its IPv6 setting. **DHCP** or **SLAAC** without a DHCPv6 server can stall the container's networking service before it configures the NIC. Set IPv6 to **Static** with an empty address on NICs that do not use IPv6.
 
 **Stop restoring** removes only the simulator's saved boot configuration; it does not remove a live address or route. For installations where Proxmox owns static addressing, configure the same address there and stop simulator restoration to avoid conflicting ownership. The simulator cannot add Proxmox NICs or fix a host bridge/link-down setting; those remain Proxmox tasks.
 

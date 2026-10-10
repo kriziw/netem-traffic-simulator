@@ -14,6 +14,8 @@
 {% include "_target_updates.html" %}
 <section class="card space-top"><div class="card-head"><div class="card-title">Data interfaces</div></div><div class="card-body">
 <div id="route-health" class="flash {{ 'error' if system.route_health.state == 'error' else 'info' }}" role="status">{{ system.route_health.message }}</div>
+<div id="path-readiness" class="flash error" role="status"{% if system.readiness.ready or system.readiness.saved_route %} hidden{% endif %}>{{ system.readiness.message }}</div>
+<form method="post" action="{{ url_for('system_action') }}" id="path-repair"{% if not system.readiness.repairable %} hidden{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="repair"><button class="btn primary" {% if not system.ready or system.busy %}disabled{% endif %}>Repair traffic path</button> <span class="muted">Brings the data interface up with its address, restores the appliance route and checks the target. Saved routes are also repaired automatically.</span></form>
 {% if system.network.error %}<div class="flash error">{{ system.network.error }}</div>{% endif %}
 <div class="table-wrap"><table><thead><tr><th>Interface</th><th>Link</th><th>IPv4 address</th></tr></thead><tbody>
 {% for row in system.network.interfaces %}<tr><td>{{ row.interface }}</td><td>{{ 'Up' if row.up else 'Down' }}{% if row.up and not row.carrier %} · no carrier{% endif %}</td><td>{{ row.addresses|join(', ') or 'No IPv4 address' }}</td></tr>{% else %}<tr><td colspan="3">No data NIC found. Add one in Proxmox first.</td></tr>{% endfor %}

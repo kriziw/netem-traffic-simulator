@@ -22,9 +22,15 @@ def ip_json(*args):
     return json.loads(run(['ip', '-j', '-4', *args]))
 
 
+def address_table():
+    """Every link with its addresses. `ip -4 address show` leaves out links without an IPv4
+    address, which hides exactly the down or unaddressed data NICs that need recovery."""
+    return json.loads(run(['ip', '-j', 'address', 'show']))
+
+
 def interfaces(management='eth0'):
     rows = []
-    for link in ip_json('address', 'show'):
+    for link in address_table():
         name = link.get('ifname', '').split('@')[0]
         if name in ('lo', management) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', name):
             continue
@@ -57,7 +63,9 @@ def validate_route(payload, management='eth0', inventory=None):
                 and (a.network.prefixlen >= 31 or gateway not in (a.network.network_address, a.network.broadcast_address))]
     if not matching or any(target in a.network for a in addresses):
         raise ValueError('Gateway must be on the selected LAN and target must be upstream, outside that LAN.')
-    return {'interface': interface, 'gateway': str(gateway), 'target': str(target), 'source': str(matching[0].ip)}
+    # The address with its prefix lets a repair restore the NIC if it later comes up without it.
+    return {'interface': interface, 'gateway': str(gateway), 'target': str(target), 'source': str(matching[0].ip),
+            'address': str(matching[0])}
 
 
 def discover(management='eth0', scan=False):
@@ -125,6 +133,36 @@ def route_status(selected, management='eth0', inventory=None):
         return {'state': 'error', 'active': False, 'message': str(exc)}
 
 
+def path_readiness(selected, management='eth0', inventory=None, target='198.18.0.1', saved_interfaces=None, appliances=()):
+    """Whether a workload would reach the target through the appliance now, and whether the
+    simulator can put that right by itself. It never guesses an address or picks among appliances."""
+    rows = inventory if inventory is not None else interfaces(management)
+    if selected:
+        health = route_status(selected, management, rows)
+        row = next((r for r in rows if r['interface'] == selected['interface']), None)
+        address = selected.get('address') or ((saved_interfaces or {}).get(selected['interface']) or {}).get('address')
+        repairable = not health['active'] and row is not None and bool(row['addresses'] or address)
+        message = (f"Traffic to {selected['target']} goes through the appliance at {selected['gateway']} on {selected['interface']}."
+                   if health['active'] else health['message'] + (' The simulator can restore it.' if repairable else ''))
+        return {'ready': health['active'], 'repairable': repairable, 'saved_route': True, 'message': message,
+                'path': {key: selected.get(key) for key in ('interface', 'gateway', 'target', 'source')}}
+    try:
+        actual = ip_json('route', 'get', target)[0]
+    except (OSError, ValueError, IndexError):
+        actual = {}
+    path = {'interface': actual.get('dev'), 'gateway': actual.get('gateway'), 'target': target, 'source': actual.get('prefsrc')}
+    # A single-NIC simulator legitimately reaches the appliance through eth0; with a data NIC present it would bypass it.
+    if actual.get('dev') and (actual['dev'] != management or not rows):
+        return {'ready': True, 'repairable': False, 'saved_route': False, 'path': path,
+                'message': f"No appliance route is selected; traffic to {target} uses the system route on {actual['dev']}."}
+    single = len(appliances) == 1
+    reason = (f"No appliance route is selected, so traffic to {target} would leave through the management interface "
+              f"({management}) and bypass the appliance." if actual.get('dev') else f"There is no route to {target}.")
+    hint = (f" Repair selects the saved appliance {appliances[0].get('name') or appliances[0].get('gateway')}." if single
+            else " Select an appliance under Updates & Appliance Routing.")
+    return {'ready': False, 'repairable': single, 'saved_route': False, 'path': path, 'message': reason + hint}
+
+
 def validate_interface(payload, management='eth0', links=None):
     if not isinstance(payload, dict):
         raise ValueError('Interface configuration must be an object.')
@@ -142,7 +180,7 @@ def validate_interface(payload, management='eth0', links=None):
         raise ValueError('Choose a unicast data LAN address, outside the benchmark target range.')
     if address.network.prefixlen < 31 and address.ip in (address.network.network_address, address.network.broadcast_address):
         raise ValueError('The network or broadcast address cannot be used for the simulator.')
-    links = links if links is not None else ip_json('address', 'show')
+    links = links if links is not None else address_table()
     found = next((r for r in links if r.get('ifname', '').split('@')[0] == name), None)
     if not found:
         raise ValueError('Data interface is missing. Add its NIC in Proxmox first.')
