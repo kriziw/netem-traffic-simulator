@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.7.1...v0.8.0) (2026-10-10)
+
+
+### Features
+
+* update controlled targets remotely from the simulator ([#27](https://github.com/kriziw/netem-traffic-simulator/issues/27)) ([f553cf6](https://github.com/kriziw/netem-traffic-simulator/commit/f553cf6b3fac3988ea78c39cac74c113667f65f2))
+
+
+### Bug Fixes
+
+* preserve controlled target UDP reply addresses ([#26](https://github.com/kriziw/netem-traffic-simulator/issues/26)) ([3c2b85e](https://github.com/kriziw/netem-traffic-simulator/commit/3c2b85e52841d3003d10e64a31ead99c4663a1cd))
+
 ## [0.7.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.7.0...v0.7.1) (2026-10-09)
 
 
