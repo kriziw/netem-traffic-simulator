@@ -486,7 +486,67 @@ bash /var/tmp/ntg-update/scripts/install-lxc.sh
 rm -rf /var/tmp/ntg-update
 ```
 
-The controlled target has no management GUI and must be updated separately with `scripts/install-target.sh`, to the same release when a protocol change requires it.
+### Remote controlled target updates
+
+The simulator's **Updates & Appliance Routing → Controlled target updates** panel
+can check and install stable releases on your virtual ISP modem using a dedicated
+target API key. The simulator and target remain separate installations: updating
+the simulator does not automatically update the target.
+
+Enable remote updates once from the modem console using the current release's
+source checkout. Run as root, replacing the address with the modem's configured
+management IPv4:
+
+```bash
+NETEM_TARGET_MANAGEMENT_HOST=192.168.0.201 bash scripts/install-target.sh
+```
+
+The installer prints a dedicated API key and TLS certificate SHA-256 fingerprint.
+Copy them into the simulator's **Connect target management** form together with
+the modem's management IPv4. This key is separate from the simulator integration
+API key. The modem and simulator must share a directly connected management IPv4
+LAN; the simulator uses its configured management interface (normally eth0).
+The API listens on HTTPS **8091**, bound to that modem address. Allow access from
+the simulator on your management firewall. Workload traffic still uses TCP 8090
+and UDP 9000 through the appliance.
+
+Then use **Check target updates**, stop workloads, and **Install target update**.
+Progress and the installed version appear on the same page; the simulator stays
+online while the target restarts. **Refresh target status** checks connectivity and
+recovers the result of a task started before leaving the page. A busy target rejects
+additional jobs. The remote worker rechecks the latest stable release, rejects
+modified application files, keeps a rollback copy of code and the virtual
+environment, and verifies the restarted target's version. Failure restores the
+previous application and services. An interrupted or unreachable task remains
+unverified: reconnect and refresh status before retrying.
+
+The target's HTTPS API runs as its own unprivileged service. A separate root worker
+accepts only release checks and installs from this fixed repository; clients cannot
+choose commands, paths, repositories or arbitrary package URLs. The simulator
+verifies the independently copied certificate fingerprint before sending the key
+and never follows redirects. Saved credentials are root-only and excluded from
+status responses. **Disconnect & remove API key** removes the simulator's saved
+connection; it does not disable the modem's management service.
+
+Subsequent target installs preserve its management address, API key and certificate.
+To revoke a key, generate a replacement on the modem as root and reconnect the
+simulator with it:
+
+```bash
+umask 077
+printf 'ntt_%s\\n' "$(openssl rand -hex 32)" > /etc/netem-traffic-target-manager/api.key
+chown root:trafficgen-target-manager /etc/netem-traffic-target-manager/api.key
+chmod 0640 /etc/netem-traffic-target-manager/api.key
+```
+
+The API reads the key per request, so rotation immediately rejects the old key.
+Keep the printed key private. If you replace the TLS certificate, independently
+verify its new fingerprint before reconnecting.
+
+For an existing simulator, run the current `scripts/install-lxc.sh` once as root
+to install the new privileged-worker actions. On targets where remote management
+has not been enabled, console updates with `scripts/install-target.sh` continue
+to work as before.
 
 Integration clients can inspect `GET /api/v1/network` and select an existing saved appliance with authenticated `POST /api/v1/network/select` and `{"appliance_id":"..."}`. Selection returns `202` with a job ID; poll the network endpoint until that job completes or fails before starting a workload. Network controls require the same Bearer API key as workload controls. GUI controls retain administrator login and CSRF checks.
 

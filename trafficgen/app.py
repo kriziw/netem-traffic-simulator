@@ -36,6 +36,7 @@ from .diagnosis import target_finding
 from .engine import WorkloadController
 from .profiles import profile_payload
 from . import maintenance
+from . import remote_target
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
 from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface
@@ -114,6 +115,10 @@ def create_app():
 
     def system_snapshot():
         state = maintenance.status(settings)
+        state["target"] = maintenance.read_json(maintenance.ADMIN_DIR / remote_target.STATUS_FILE,
+                                               {"connected": False, "release": {}, "job": {}})
+        state["target"].update(remote_target.compare_versions(state["target"].get("version"), __version__))
+        state["workload_active"] = app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping")
         try:
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
             state["network"] = discover(policy.get("management_interface", "eth0"))
@@ -148,7 +153,7 @@ def create_app():
     def system_action():
         action = request.form.get("action", "")
         try:
-            host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface"))
+            host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface", "target_install"))
             if action == "save_appliance":
                 policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
                 route = validate_route(dict(request.form), policy.get("management_interface", "eth0"))
@@ -183,6 +188,11 @@ def create_app():
                 elif action == "install_update":
                     if not maintenance.release_status().get("available"):
                         raise ValueError(f"v{__version__} is already the latest checked release. Check for updates again.")
+                    payload = {"tag": request.form.get("tag", "")}
+                elif action == "configure_target":
+                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                    payload = remote_target.validate_config(dict(request.form), policy.get("management_interface", "eth0"))
+                elif action == "target_install":
                     payload = {"tag": request.form.get("tag", "")}
                 maintenance.enqueue(settings, action, payload)
                 flash("Task queued. Its result will appear below without refreshing the page.", "info")

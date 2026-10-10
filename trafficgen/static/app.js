@@ -257,6 +257,25 @@ window.TrafficGen = (() => {
     }
     render(null);poll();
   }
+  function renderTargetState(state){
+    const target=state.target||{},release=target.release||{},job=target.job||{};
+    const status=document.getElementById('target-status');if(!status)return;
+    status.textContent=target.connected?'Connected to '+target.host+' · installed v'+target.version:'Connect the update service on your virtual ISP modem.';
+    const match=document.getElementById('target-version-match');
+    if(match){
+      const mismatch=target.connected&&target.version_match===false;
+      match.className=mismatch?'warning':'muted';
+      match.textContent=mismatch?'This simulator runs v'+target.simulator_version+'. '+(target.behind_simulator?'Update the target to the same release: ':'The target runs a newer release; update the simulator to match: ')+'per-WAN attribution and voice/video replies depend on matching versions.'
+        :(target.connected&&target.version_match?'Matches this simulator (v'+target.simulator_version+').':'');
+    }
+    document.getElementById('target-release-status').textContent=release.tag?'Latest: '+(release.display_tag||release.tag)+(release.available?' · update available':' · up to date'):'No target release check yet.';
+    document.getElementById('target-job-status').textContent=target.busy?'Target task running…':(job.message||'');
+    document.getElementById('target-release-tag').value=release.tag||'';
+    for(const button of document.querySelectorAll('[data-target-action]')){
+      button.disabled=!state.ready||state.busy||!target.connected||(target.busy&&button.dataset.targetAction!=='target_status')||
+        (button.dataset.targetAction==='target_install'&&(!release.available||state.workload_active));
+    }
+  }
   function systemPage(){
     let alive=true;cleanups.push(()=>alive=false);
     const jobStatus=document.getElementById('system-job');
@@ -270,6 +289,7 @@ window.TrafficGen = (() => {
       try{
         const response=await fetch('/settings/system/data',{cache:'no-store'});if(!response.ok)return;
         const state=await response.json();if(!alive)return;
+        renderTargetState(state);
         if(state.updating){updateScreen(state.version,state.release.display_tag||state.release.tag);return;}
         const job=state.job||{};
         jobStatus.textContent=state.busy?('Working: '+(job.action||'queued task')+'…'):(job.message||'No administration task yet.');
@@ -293,5 +313,5 @@ window.TrafficGen = (() => {
       }catch(_){}
     }poll();repeat(poll,2000);
   }
-  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml};
+  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
 })();

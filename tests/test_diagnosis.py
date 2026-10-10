@@ -321,3 +321,12 @@ def test_recent_egress_shows_where_traffic_goes_now():
     assert recent["window_seconds"] == 10
     assert recent["egress"] == {"198.18.2.2": {"video": {"requests": 2, "failures": 1}},
                                 "unknown": {"dns": {"requests": 1, "failures": 1}}}
+
+
+def test_target_version_comparison_and_update_guidance():
+    from trafficgen.remote_target import compare_versions
+    assert compare_versions("0.7.0", "0.8.0") == {"simulator_version": "0.8.0", "version_match": False, "behind_simulator": True}
+    assert compare_versions("v0.8.0", "0.8.0")["version_match"] is True
+    assert compare_versions(None, "0.8.0")["version_match"] is None
+    finding = target_finding({"version": "0.6.0", "capabilities": []}, "0.8.0")
+    assert "Controlled target updates" in finding["detail"]
