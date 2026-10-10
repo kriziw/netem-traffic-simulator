@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.8.0...v0.9.0) (2026-10-10)
+
+
+### Features
+
+* check and repair the traffic path through the appliance, and refuse workloads that would bypass it ([1d8a973](https://github.com/kriziw/netem-traffic-simulator/commit/1d8a97326fa1d458f3a58b8b550e2ced06ea633a))
+* report host and target clocks so NetEm can keep the platform in sync ([1d8a973](https://github.com/kriziw/netem-traffic-simulator/commit/1d8a97326fa1d458f3a58b8b550e2ced06ea633a))
+
+
+### Bug Fixes
+
+* list data interfaces without an IPv4 address so a NIC that came up unaddressed can be recovered ([1d8a973](https://github.com/kriziw/netem-traffic-simulator/commit/1d8a97326fa1d458f3a58b8b550e2ced06ea633a))
+
 ## [0.8.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.7.1...v0.8.0) (2026-10-10)
 
 
