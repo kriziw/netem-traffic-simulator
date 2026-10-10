@@ -10,7 +10,7 @@ import threading
 
 from gevent.pywsgi import WSGIServer
 
-from .app import app
+from .app import app, path_watchdog
 from .config import ensure_admin_password, ensure_api_key, load_settings
 from .discovery import discovery_server
 
@@ -28,6 +28,8 @@ def main():
         daemon=True,
     )
     discovery.start()
+    watchdog = threading.Thread(target=path_watchdog, args=(app, stop_event), name="trafficgen-path-watchdog", daemon=True)
+    watchdog.start()
 
     server = WSGIServer(
         (settings.bind_host, settings.api_port),

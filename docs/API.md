@@ -29,6 +29,20 @@ After installing this fix, remove only the temporary `20-benchmark-bind.conf` wo
 
 The simulator exposes a versioned HTTPS REST API on TCP/8443 by default.
 
+## Traffic path readiness
+
+- `GET /api/v1/network/readiness` returns:
+  - `ready`: whether workloads reach the controlled target through the appliance now;
+  - `repairable`: whether the simulator can restore the path itself;
+  - `saved_route`: whether an appliance route is selected;
+  - `message`: the reason, written for the operator;
+  - `path`: `interface`, `gateway`, `target` and `source`;
+  - `target`: `{ok, message}` from the target's health endpoint, checked only when the route is in place;
+  - `busy`, `job` and `checked_at`.
+- `POST /api/v1/network/repair` with `{}` queues a root job that does three things: it brings the data interface up with its saved address, restores the selected appliance route and checks the target answers. It returns `202` and the job. Poll readiness until `job.id` matches and its `state` is `completed` or `failed`. When the path is already ready it returns `200` with `{"repair": "not_needed"}`, and `409` when nothing can be repaired, for example when no appliance is selected and several are saved.
+
+`POST /api/v1/workloads/start` returns `400` without starting when no appliance route is selected and the target route would leave through the management interface of a simulator that has a data NIC.
+
 ## Authentication
 
 Except for `/api/v1/health`, all API endpoints require:
