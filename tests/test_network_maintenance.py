@@ -51,6 +51,39 @@ def test_failed_path_verification_restores_previous_route(tmp_path, monkeypatch)
     assert all('default' not in call.args[0] for call in command.call_args_list)
 
 
+def test_own_route_is_recognised_by_protocol_number_or_name(tmp_path, monkeypatch):
+    # iproute2 prints protocol 186 as "bgp"; a host's rt_protos may name it differently.
+    protos = tmp_path / 'rt_protos'
+    protos.write_text('# reserved\n186\tnetem-lab  # local name\n187 isis\n')
+    monkeypatch.setattr(host_admin, 'RT_PROTOS', (protos, tmp_path / 'missing'))
+    monkeypatch.setattr(host_admin, 'RT_PROTOS_DIRS', (tmp_path / 'missing.d',))
+    for protocol in ('186', 'bgp', 'netem-lab', 186):
+        assert host_admin.managed({'protocol': protocol}), protocol
+    for protocol in ('static', 'boot', 'isis', 'kernel', None):
+        assert not host_admin.managed({'protocol': protocol}), protocol
+
+
+def test_reselecting_replaces_the_simulators_own_route_shown_as_bgp(tmp_path, monkeypatch):
+    """The route restored at boot is listed as "proto bgp"; selecting again must replace it."""
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
+    saved = dict(ROUTE, source='10.250.10.10')
+    (tmp_path / 'route.json').write_text(json.dumps(saved))
+    own = [{'dst': '198.18.0.1', 'gateway': '10.250.10.1', 'dev': 'eth1', 'protocol': 'bgp', 'prefsrc': '10.250.10.10'}]
+    with patch.object(host_admin, 'validate_route', return_value=saved),          patch.object(host_admin, 'exact_routes', return_value=own),          patch.object(host_admin, 'ip_json', return_value=[{'dev': 'eth1', 'gateway': '10.250.10.1'}]),          patch.object(host_admin, 'run', return_value='') as command:
+        assert host_admin.apply_route(ROUTE, verify=False) == {'route': saved, 'verified': False}
+    assert command.call_args_list[0].args[0] == host_admin.route_command('replace', saved)
+
+
+def test_clearing_removes_the_simulators_own_route_shown_as_bgp(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
+    saved = dict(ROUTE, source='10.250.10.10')
+    (tmp_path / 'route.json').write_text(json.dumps(saved))
+    with patch.object(host_admin, 'exact_routes', return_value=[{'protocol': 'bgp'}]),          patch.object(host_admin, 'run', return_value='') as command:
+        host_admin.clear_route()
+    command.assert_called_once_with(host_admin.route_command('del', saved))
+    assert not (tmp_path / 'route.json').exists()
+
+
 def test_unmanaged_route_is_never_overwritten(tmp_path, monkeypatch):
     monkeypatch.setattr(host_admin, 'ADMIN_DIR', tmp_path)
     with patch.object(host_admin, 'validate_route', return_value=dict(ROUTE, source='10.250.10.10')), \
