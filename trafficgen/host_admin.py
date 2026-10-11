@@ -30,6 +30,11 @@ SERVICE_NAME = 'netem-traffic-target' if TARGET_ROLE else 'netem-traffic-simulat
 REPOSITORY = 'https://github.com/kriziw/netem-traffic-simulator.git'
 RELEASE_API = 'https://api.github.com/repos/kriziw/netem-traffic-simulator/releases/latest'
 ROUTE_PROTOCOL = '186'
+# iproute2 prints a route protocol by name when it has one: 186 is "bgp" in its built-in
+# table and on Debian, so the simulator's own routes show up as "proto bgp".
+ROUTE_PROTOCOL_NAMES = ('bgp',)
+RT_PROTOS = (Path('/etc/iproute2/rt_protos'), Path('/usr/share/iproute2/rt_protos'), Path('/usr/lib/iproute2/rt_protos'))
+RT_PROTOS_DIRS = (Path('/etc/iproute2/rt_protos.d'), Path('/usr/share/iproute2/rt_protos.d'))
 SYSTEMD_DIR = Path('/etc/systemd/system')
 
 
@@ -144,8 +149,24 @@ def exact_routes(target):
     return ip_json('route', 'show', 'exact', target + '/32')
 
 
+def route_protocol_names():
+    """Every way `ip` may print the simulator's route protocol: its number or a name."""
+    names = {ROUTE_PROTOCOL, *ROUTE_PROTOCOL_NAMES}
+    files = [*RT_PROTOS, *(path for folder in RT_PROTOS_DIRS for path in sorted(folder.glob('*.conf')))]
+    for path in files:
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            fields = line.split('#', 1)[0].split()
+            if len(fields) >= 2 and fields[0] == ROUTE_PROTOCOL:
+                names.add(fields[1])
+    return names
+
+
 def managed(route):
-    return str(route.get('protocol')) == ROUTE_PROTOCOL
+    return str(route.get('protocol')) in route_protocol_names()
 
 
 def route_command(action, route):
