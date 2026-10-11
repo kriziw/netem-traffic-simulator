@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.9.0...v0.9.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* recognise the simulator's own target route when ip shows it as bgp ([#31](https://github.com/kriziw/netem-traffic-simulator/issues/31)) ([90aa2a8](https://github.com/kriziw/netem-traffic-simulator/commit/90aa2a85489be8c66f78f64567fc544021a932c9))
+
 ## [0.9.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.8.0...v0.9.0) (2026-10-10)
 
 
