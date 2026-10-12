@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.13.0...v0.13.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* animate simulator and target update checks ([#41](https://github.com/kriziw/netem-traffic-simulator/issues/41)) ([b860d47](https://github.com/kriziw/netem-traffic-simulator/commit/b860d4786f940f0c97b535398429e67981400e12))
+
 ## [0.13.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.12.0...v0.13.0) (2026-10-12)
 
 
