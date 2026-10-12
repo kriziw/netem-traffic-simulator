@@ -94,3 +94,5 @@ body.update-active{overflow:hidden}
 .check-feedback.success::before,.check-feedback.error::before{border:0;border-radius:0;height:auto;font-weight:800}.check-feedback.success::before{content:"✓"}.check-feedback.error::before{content:"!"}
 @keyframes check-result{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.check-feedback.checking::before,.check-feedback.success,.check-feedback.error{animation:none}}
+
+.brand-logo{width:36px;max-height:42px;object-fit:contain}.brand-logo[hidden],.brand-mark[hidden]{display:none}

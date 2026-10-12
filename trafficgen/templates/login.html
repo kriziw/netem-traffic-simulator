@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Sign in · NetEm Traffic Simulator</title>
+  <title>Sign in · {{ branding.get('name','NetEm Traffic Simulator') }}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  {% if branding_enabled %}<link data-brand-theme rel="stylesheet" href="{{ url_for('controller_brand_stylesheet') }}">{% if branding.favicon %}<link data-brand-icon rel="icon" href="{{ branding_asset_url(branding.favicon) }}">{% endif %}{% endif %}
 </head>
 <body class="login-body">
   <div class="login-card">
     <div class="brand login-brand">
-      <div class="brand-mark">NT</div>
-      <div><div class="brand-name">Traffic Simulator</div><div class="brand-sub">NetEm companion</div></div>
+      <img data-brand-logo class="brand-logo" {% if branding.logo %}src="{{ branding_asset_url(branding.logo) }}"{% else %}hidden{% endif %} alt="{{ branding.get('name','Traffic execution agent') }}"><div data-brand-mark class="brand-mark" {% if branding.logo %}hidden{% endif %}>{{ branding.get('mark','NT') }}</div>
+      <div><div data-brand-name class="brand-name">{{ branding.get('name','Traffic Simulator') }}</div><div data-brand-subtitle class="brand-sub">{{ branding.get('subtitle','NetEm companion') }}</div></div>
     </div>
     <h1>Administrator access</h1>
     <p>Sign in to the read-only execution monitor using the installation password. NetEm owns workload and configuration controls.</p>
@@ -23,5 +24,6 @@
       <button class="btn primary" type="submit">Sign in</button>
     </form>
   </div>
+<script src="{{ url_for('static', filename='branding-live.js') }}"></script>
 </body>
 </html>
