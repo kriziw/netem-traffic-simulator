@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.14.0...v0.15.0) (2026-10-12)
+
+
+### Features
+
+* make simulator a read-only execution agent with controller-only commands ([#45](https://github.com/kriziw/netem-traffic-simulator/issues/45)) ([23a5450](https://github.com/kriziw/netem-traffic-simulator/commit/23a5450c53f06e3d366572c7d78b74a1f853ff80))
+
 ## [0.14.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.13.1...v0.14.0) (2026-10-12)
 
 
