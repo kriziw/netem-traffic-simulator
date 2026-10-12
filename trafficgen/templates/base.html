@@ -25,6 +25,7 @@
       <a class="nav-link {% if page == 'dem' %}active{% endif %}" href="{{ url_for('dem_page') }}">Digital Experience</a>
 
       <div class="nav-group">System</div>
+      <a class="nav-link {% if page == 'network_setup' %}active{% endif %}" href="{{ url_for('network_setup_ui') }}">Network setup</a>
       <a class="nav-link {% if page == 'system' %}active{% endif %}" href="{{ url_for('system_settings') }}">Updates & Appliance Routing</a>
       <a class="nav-link {% if page == 'api' %}active{% endif %}" href="{{ url_for('api_settings') }}">API & Integration</a>
     </nav>

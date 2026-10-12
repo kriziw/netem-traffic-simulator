@@ -43,6 +43,32 @@ Use the simulator's existing interface configuration tools after wiring the NICs
 Verify the physical path with WAN counters during the first calibration workload:
 successful kernel/target checks alone cannot prove which external bridge was crossed.
 
+## Guided network setup
+
+Open **Network setup** in the simulator. Attach data NICs in Proxmox, then refresh.
+The page detects guest interfaces and prefills single existing IPv4 addresses.
+Role suggestions use eth1-eth5; confirm the actual bridge attachment in Proxmox.
+The editable template maps management to vmbr0, appliance LAN to vmbr3,
+WAN1/WAN2 calibration to vmbr1/vmbr2, and clean baselines to vmbr4/vmbr5.
+Bridge labels are wiring guidance, not discovery or Proxmox provisioning.
+
+Enter a unique simulator IPv4/prefix, gateway, controlled target data IP and
+NetEm WAN ID for calibration. **Save plan** persists a draft without networking
+changes. **Configure address & verify path** queues guest interface validation,
+address enablement/persistence and source-bound path verification as one task.
+It does not select the workload path or add a default gateway. After success,
+open **Traffic paths** and select **Use for full workload**.
+
+If target verification fails, the address remains saved for diagnosis; the
+previous workload selection is retained. Configuration is blocked during runs
+or administration tasks. Conflicting existing addresses must be changed in
+Proxmox. Changed source/interface/target definitions create a new policy;
+remove unused older policies from Traffic paths.
+
+Calibration and baseline NICs sharing an ISP subnet need explicit ARP/address
+handling and symmetric return routing. Prefer a separate baseline router
+subnet/VLAN. Confirm physical traversal with WAN counters before scaling up.
+
 ## Configuration and selection
 
 In NetEm, use **Platform Health → Traffic steering**. Select appliance paths from

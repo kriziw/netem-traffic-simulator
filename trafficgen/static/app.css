@@ -81,3 +81,6 @@ body.update-active{overflow:hidden}
 .live-finding{display:block;margin-top:12px;padding:9px 11px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;font-size:10px;color:#cbd7e4;overflow-wrap:anywhere}
 .live-finding.warn{border-left-color:var(--warn)}.live-finding.bad{border-left-color:var(--danger)}.live-finding.info{border-left-color:var(--blue)}
 #dem-apps td,#dem-egress td{white-space:nowrap}
+.setup-steps h2{font-size:16px;margin:8px 0}.setup-steps p{color:var(--muted);font-size:11px;line-height:1.6}
+.setup-flow{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px;margin-bottom:18px;border:1px solid var(--line);border-radius:8px;font-size:12px}.setup-flow strong{color:var(--accent)}
+.setup-card .card-title{font-size:15px}.setup-help{font-size:10px;color:var(--muted);line-height:1.6;margin:6px 0 12px}.setup-confirm{display:flex;gap:8px;align-items:flex-start;line-height:1.6;margin:10px 0 16px}.setup-confirm input{width:16px;min-height:16px;flex-shrink:0;margin-top:2px}
