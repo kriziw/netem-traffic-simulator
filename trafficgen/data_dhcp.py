@@ -56,6 +56,8 @@ def event(admin, action, values):
         for link in links:
             copy = dict(link)
             if link.get("ifname", "").split("@")[0] == interface:
+                if any(a.get('family') == 'inet' and f"{a['local']}/{a['prefixlen']}" != old.get('address') for a in link.get('addr_info', [])):
+                    raise ValueError('Interface addressing changed outside DHCP; existing addresses were retained.')
                 copy["addr_info"] = [a for a in link.get("addr_info", []) if not
                     (a.get("family") == "inet" and f"{a['local']}/{a['prefixlen']}" == old.get("address"))]
             filtered.append(copy)

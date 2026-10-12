@@ -9,6 +9,7 @@ WorkingDirectory=/opt/netem-traffic-simulator
 ExecStart=/usr/bin/python3 -I -c "import sys; sys.path.insert(0, '/opt/netem-traffic-simulator'); from trafficgen.data_dhcp import main; main()" client %i
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=5
 UMask=0022
 
 [Install]

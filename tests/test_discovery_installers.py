@@ -75,6 +75,7 @@ def test_in_place_reinstall_preserves_source_and_restarts_service(tmp_path, inst
     helper = (source / "scripts/configure-lxc-service.sh").read_text().replace('/etc/systemd/system', str(units))
     (installation_source / "scripts/configure-lxc-service.sh").write_text(helper)
     shutil.copy(source / "scripts/ensure-time-sync.sh", installation_source / "scripts/ensure-time-sync.sh")
+    shutil.copy(source / "scripts/data-dhcp-hook.sh", installation_source / "scripts/data-dhcp-hook.sh")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     logfile = tmp_path / "calls"
