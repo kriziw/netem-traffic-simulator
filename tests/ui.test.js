@@ -138,3 +138,32 @@ test('simple setup enables valid manual settings and preserves edits during back
   await pollTick();assert.equal(requests,0);
   gateway.value='';input();assert.equal(button.disabled,true);
 });
+
+
+test('release checks show immediate progress and require the new job before revealing results',()=>{
+  const fields={};for(const scope of ['simulator','target'])fields['release-check-'+scope]={dataset:{releaseCheckIndicator:scope},hidden:true,className:'',textContent:'',setAttribute(name,value){this[name]=value;}};
+  const ctx={window:{},document:{addEventListener(){},getElementById:id=>fields[id]}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  const ui=ctx.window.TrafficGen,sim=fields['release-check-simulator'];
+  ui.beginReleaseCheck('simulator','old-job');
+  assert.equal(sim.hidden,false);assert.match(sim.textContent,/Checking simulator/);assert.equal(sim['aria-busy'],'true');
+  ui.releaseCheckState({busy:false,job:{id:'old-job',action:'check_update',state:'completed'},release:{tag:'v0.1.0',available:false}});
+  assert.match(sim.className,/checking/);
+  ui.releaseCheckState({busy:true,job:{id:'new-job',action:'check_update',state:'running'}});
+  ui.releaseCheckState({busy:false,job:{id:'new-job',action:'check_update',state:'completed'},release:{tag:'v0.13.0',available:true}});
+  assert.match(sim.textContent,/Update available: v0.13.0/);assert.match(sim.className,/success/);assert.equal(sim['aria-busy'],'false');
+  assert.equal(fields['release-check-target'].hidden,true);
+});
+
+test('target release feedback distinguishes up-to-date from failure with cached release data',()=>{
+  const element={dataset:{releaseCheckIndicator:'target'},hidden:true,className:'',textContent:'',setAttribute(){}};
+  const ctx={window:{},document:{addEventListener(){},getElementById:id=>id==='release-check-target'?element:null}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  const ui=ctx.window.TrafficGen;
+  ui.beginReleaseCheck('target','old');
+  ui.releaseCheckState({busy:false,job:{id:'new',action:'target_check',state:'completed'},target:{release:{tag:'v0.13.0',available:false}}});
+  assert.match(element.textContent,/Target is up to date/);
+  ui.beginReleaseCheck('target','new');
+  ui.releaseCheckState({busy:false,job:{id:'failed',action:'target_check',state:'failed',message:'Cannot reach target'},target:{release:{tag:'v0.13.0',available:false}}});
+  assert.match(element.className,/error/);assert.match(element.textContent,/Cannot reach target/);assert.doesNotMatch(element.textContent,/up to date/);
+});
