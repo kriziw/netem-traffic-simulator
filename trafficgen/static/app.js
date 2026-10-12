@@ -56,7 +56,7 @@ window.TrafficGen = (() => {
   async function updatePage(response){
     if(!response.ok)throw new Error("Request failed ("+response.status+"). Check status before retrying.");
     const next=new DOMParser().parseFromString(await response.text(),"text/html");
-    const rejection=next.querySelector('.flash.error');
+    const rejection=next.querySelector('.flash-stack .flash.error');
     if(rejection)for(const scope of Object.keys(releaseChecks))if(releaseChecks[scope]?.phase==='checking')finishReleaseCheck(scope,'error',rejection.textContent);
     const workspace=next.querySelector('main.workspace'),scripts=next.getElementById('page-scripts');
     if(!workspace||!scripts)throw new Error("Unexpected response. Please sign in again if your session expired.");
