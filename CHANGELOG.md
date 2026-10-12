@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.15.0...v0.16.0) (2026-10-12)
+
+
+### Features
+
+* apply controller branding to the execution monitor ([#48](https://github.com/kriziw/netem-traffic-simulator/issues/48)) ([50a67b6](https://github.com/kriziw/netem-traffic-simulator/commit/50a67b6263e5ab6cc44f9484ec992bcfb304af7b))
+* expose executor data and commands for native NetEm controls ([#47](https://github.com/kriziw/netem-traffic-simulator/issues/47)) ([10e78b2](https://github.com/kriziw/netem-traffic-simulator/commit/10e78b2ae6b1804fc8695c8bd6f92c73c4e2e74d))
+
 ## [0.15.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.14.0...v0.15.0) (2026-10-12)
 
 
