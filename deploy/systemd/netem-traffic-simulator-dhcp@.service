@@ -1,0 +1,15 @@
+[Unit]
+Description=Simulator data DHCP on %i (no default route or DNS changes)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/netem-traffic-simulator
+ExecStart=/usr/bin/python3 -I -c "import sys; sys.path.insert(0, '/opt/netem-traffic-simulator'); from trafficgen.data_dhcp import main; main()" client %i
+Restart=on-failure
+RestartSec=5
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

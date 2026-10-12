@@ -14,7 +14,7 @@ fi
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync git iproute2 iputils-ping iputils-arping curl
+apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync git iproute2 iputils-ping iputils-arping busybox curl
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$RUNTIME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -73,7 +73,8 @@ bash "$APP_DIR/scripts/configure-lxc-service.sh" netem-traffic-simulator
 mkdir -p /var/lib/netem-traffic-simulator-admin
 chown root:root /var/lib/netem-traffic-simulator-admin
 chmod 0755 /var/lib/netem-traffic-simulator-admin
-for unit in netem-traffic-simulator-admin.path netem-traffic-simulator-admin.service netem-traffic-simulator-route.service; do
+chmod 0755 "$APP_DIR/scripts/data-dhcp-hook.sh"
+for unit in netem-traffic-simulator-admin.path netem-traffic-simulator-admin.service netem-traffic-simulator-route.service netem-traffic-simulator-dhcp@.service; do
   install -m 0644 "$APP_DIR/deploy/systemd/$unit" "/etc/systemd/system/$unit"
 done
 python3 -I -c "import sys; sys.path.insert(0, '$APP_DIR'); from trafficgen.host_admin import main; main()" --record-install

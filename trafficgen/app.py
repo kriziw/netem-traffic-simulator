@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import re
 import threading
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 import time
@@ -45,6 +46,7 @@ from . import remote_target
 from . import traffic_paths
 from . import network_setup
 from . import setup_probe
+from . import data_dhcp
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
 from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness, address_table
@@ -226,7 +228,7 @@ def create_app():
     def serialize_routing_requests():
         if request.method in ("POST", "PUT", "DELETE") and request.endpoint in (
                 "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
-                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe"):
+                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe", "network_setup_dhcp"):
             appliance_inventory_lock.acquire()
             g.appliance_inventory_lock = True
 
@@ -713,11 +715,65 @@ def create_app():
         for kind, wan in (("isp1", "wan1"), ("isp2", "wan2")):
             if not hints.get(kind):
                 hints[kind] = next((path["gateway"] for path in paths if path.get("mode") == "direct_netem" and path.get("wan_id") == wan), "")
+        cards = network_setup.cards(saved, inventory, paths, management_interface())
+        selected_nic = next((nic for nic in inventory if nic['interface'] == request.values.get('interface')), inventory[0] if inventory else None)
+        chosen_role = request.values.get('role')
+        if chosen_role not in {row[0] for row in network_setup.ROLES}:
+            matches = [card for card in cards if card.get('id') and selected_nic and card['interface'] == selected_nic['interface']]
+            chosen_role = matches[0]['role'] if len(matches) == 1 else None
+        active = next((dict(card) for card in cards if card['role'] == chosen_role), None)
+        leases = {nic:data_dhcp.lease(maintenance, nic) for nic in maintenance.read_json(maintenance.ADMIN_DIR / data_dhcp.FILE, {})}
+        if active and selected_nic:
+            current = leases.get(selected_nic['interface'], {})
+            if active['interface'] != selected_nic['interface']:
+                active.update(interface=selected_nic['interface'], address='', gateway='', path=None)
+            active['nic'] = selected_nic
+            if current.get('state') == 'bound':
+                active.update(address=current['address'], gateway=current.get('gateway',''))
+            elif len(selected_nic['addresses']) == 1:
+                active['address'] = selected_nic['addresses'][0]
+            if not active['gateway'] and active['mode'] == 'appliance':
+                active['gateway'] = next((row['gateway'] for row in saved_appliances() if row['interface'] == selected_nic['interface']), '')
+            if not active['gateway'] and active['address']:
+                try:
+                    active['gateway'] = next((row['gateway'] for row in ip_json('route','show','dev',selected_nic['interface']) if row.get('dst') == 'default' and row.get('gateway')), '')
+                except (OSError,ValueError):
+                    pass
+            if not active['gateway']:
+                report = maintenance.read_json(maintenance.ADMIN_DIR / setup_probe.FILE, {})
+                if time.time() - report.get('checked_at',0) <= 900:
+                    kind = 'appliance' if active['role'] == 'appliance' else ('isp1' if active['role'] in ('wan1','baseline1') else 'isp2')
+                    active['gateway'] = next((observation['gateway'] for nic in report.get('interfaces',[]) if nic['interface'] == selected_nic['interface']
+                                             for observation in nic.get('observations',[]) if observation.get('reachable') is True and observation.get('kind') == kind), '')
         return render_template("network_setup.html", page="network_setup", system=state,
-                               cards=network_setup.cards(saved, inventory, paths, management_interface()),
+                               cards=cards, active=active, selected_nic=selected_nic, leases=leases,
                                interfaces=inventory, management=management_interface(), network_error=error,
                                probe_report=maintenance.read_json(maintenance.ADMIN_DIR / setup_probe.FILE, {}), probe_hints=hints, now=time.time(),
                                busy=state["busy"] or app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"))
+
+    @app.get('/settings/network-setup/status')
+    @admin_required
+    def network_setup_status():
+        state = maintenance.status(settings)
+        enabled = maintenance.read_json(maintenance.ADMIN_DIR / data_dhcp.FILE, {})
+        busy = state['busy'] or app.config['TRAFFICGEN_CONTROLLER'].status().get('status') in ('starting','running','stopping')
+        return jsonify(busy=busy, job=state['job'], leases={nic:data_dhcp.lease(maintenance,nic) for nic in enabled})
+
+    @app.post('/settings/network-setup/dhcp')
+    @admin_required
+    def network_setup_dhcp():
+        interface = request.form.get('interface','')
+        try:
+            host_available(require_idle=True)
+            data_dhcp.validate_nic(SimpleNamespace(management=management_interface,interfaces=interfaces), interface)
+            if request.form.get('action','start') not in ('start','stop'):
+                raise ValueError('Choose automatic addressing or stop DHCP.')
+            action = 'stop_data_dhcp' if request.form.get('action') == 'stop' else 'data_dhcp'
+            maintenance.enqueue(settings, action, {'interface':interface})
+            flash('Automatic addressing task queued. This page will update when the router responds.', 'info')
+        except (ValueError,OSError) as exc:
+            flash(str(exc),'error')
+        return redirect(url_for('network_setup_ui',interface=interface,role=request.form.get('role','')))
 
     @app.post("/settings/network-setup/probe")
     @admin_required
@@ -766,7 +822,7 @@ def create_app():
             _write_secret(settings.runtime_dir / network_setup.FILE, json.dumps(saved))
             flash("Setup queued: enabling and saving the interface, then verifying the path. Refresh status for the result." if action == "configure"
                   else "Plan saved. Configure & verify applies it inside the simulator.", "success")
-            return redirect(url_for("network_setup_ui") + "#" + row["role"])
+            return redirect(url_for("network_setup_ui", interface=row['interface'], role=row['role']))
         except (ValueError, OSError) as exc:
             flash(str(exc), "error")
             # Keep entered fields visible after a failed submission.

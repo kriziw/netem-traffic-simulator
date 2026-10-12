@@ -227,6 +227,12 @@ def clear_route():
 def configure_interface(payload, persist=True):
     config = validate_interface(payload, management())
     name = config['interface']
+    from . import data_dhcp
+    if data_dhcp.enabled(sys.modules[__name__], name):
+        current = data_dhcp.lease(sys.modules[__name__], name)
+        if current.get('state') != 'bound' or current.get('address') != config['address']:
+            raise ValueError('This interface uses DHCP. Wait for its current lease or stop automatic addressing first.')
+        return {'message': 'Using the current DHCP lease; address renewal stays enabled.'}
     saved = read_json(ADMIN_DIR / 'interfaces.json', {})
     if persist and name in saved and saved[name] != config:
         raise ValueError('Stop restoring the old saved interface configuration before changing it.')
@@ -271,11 +277,20 @@ def restore_path(route, verify):
         configs.setdefault(route['interface'], {'interface': route['interface'], 'address': route['address']})
     failures = []
     for config in configs.values():
+        from . import data_dhcp
+        if data_dhcp.enabled(sys.modules[__name__], config['interface']):
+            continue
         try:
             configure_interface(config, persist=False)
         except Exception as exc:
             failures.append(str(exc))
     if route:
+        from . import data_dhcp
+        if data_dhcp.enabled(sys.modules[__name__], route['interface']):
+            current = data_dhcp.lease(sys.modules[__name__], route['interface'])
+            actual = next((nic for nic in interfaces(management()) if nic['interface'] == route['interface']), {})
+            if current.get('state') != 'bound' or route.get('address') not in actual.get('addresses', []):
+                return failures
         try:
             apply_route(route, verify=verify)
         except Exception as exc:
@@ -398,6 +413,10 @@ def process_request():
         elif job['action'] == 'probe_setup':
             from .setup_probe import collect
             result = collect(payload, sys.modules[__name__])
+        elif job['action'] in ('data_dhcp', 'stop_data_dhcp'):
+            from .data_dhcp import configure, stop
+            result = (configure(payload, sys.modules[__name__], wait=0) if job['action'] == 'data_dhcp'
+                      else stop(payload, sys.modules[__name__]))
         elif job['action'] == 'configure_inventory':
             result = inventory_configure(payload)
         elif job['action'] == 'disconnect_inventory':
