@@ -110,3 +110,50 @@ def test_history_retains_the_path_after_service_restart(tmp_path):
     create_run(path, run)
     init_db(path)
     assert recent_runs(path)[0]["traffic_path"] == DEFINITION
+
+
+@pytest.mark.parametrize("mode", sorted(traffic_paths.MODES))
+def test_real_workload_engine_binds_http_and_udp_to_the_selected_source(mode):
+    import socket
+    import gevent
+    from locust.env import Environment
+    from trafficgen.engine import CorporateUser
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sources = []
+    def echo():
+        for _ in range(3):
+            data, peer = sock.recvfrom(512)
+            sources.append(peer[0])
+            sock.sendto(data[:12], peer)
+    worker = gevent.spawn(echo)
+    environment = Environment()
+    events = []
+    environment.events.request.add_listener(lambda **event: events.append(event))
+    config = dict(run_id="bound-workload", personas={"knowledge_worker":100}, applications={"voice":100},
+                  target="http://127.0.0.1", udp_port=sock.getsockname()[1],
+                  traffic_path=dict(DEFINITION, mode=mode, source="127.0.0.2"))
+    user = type("BoundUser", (CorporateUser,), {"abstract":False, "host":config["target"], "runtime_config":config})(environment)
+    try:
+        user.on_start()
+        assert user.client.adapters["http://"].poolmanager.connection_pool_kw["source_address"] == ("127.0.0.2", 0)
+        user._udp_burst("voice", 160, 3, 0.01)
+        assert sources == ["127.0.0.2"] * 3
+        assert events[0]["exception"] is None
+    finally:
+        worker.kill()
+        sock.close()
+        user.client.close()
+
+
+def test_restore_can_add_a_path_source_alias_without_replacing_saved_nic_configuration(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_admin, "ADMIN_DIR", tmp_path)
+    primary = {"interface":"eth2", "address":"10.251.10.10/24"}
+    alias = {"interface":"eth2", "address":"10.251.10.11/24"}
+    (tmp_path / "interfaces.json").write_text(json.dumps({"eth2":primary}))
+    link = [{"ifname":"eth2", "flags":["UP"], "addr_info":[{"family":"inet", "local":"10.251.10.10", "prefixlen":24}]}]
+    with patch.object(host_admin, "validate_interface", return_value=alias), patch.object(host_admin, "address_table", return_value=link), \
+         patch.object(host_admin, "interfaces", return_value=INTERFACES), patch.object(host_admin, "run") as run:
+        host_admin.configure_interface(alias, persist=False)
+    assert ["ip", "-4", "address", "add", alias["address"], "dev", "eth2"] in [call.args[0] for call in run.call_args_list]
+    assert json.loads((tmp_path / "interfaces.json").read_text()) == {"eth2":primary}

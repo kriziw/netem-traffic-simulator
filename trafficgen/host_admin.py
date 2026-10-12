@@ -228,7 +228,7 @@ def configure_interface(payload, persist=True):
     config = validate_interface(payload, management())
     name = config['interface']
     saved = read_json(ADMIN_DIR / 'interfaces.json', {})
-    if name in saved and saved[name] != config:
+    if persist and name in saved and saved[name] != config:
         raise ValueError('Stop restoring the old saved interface configuration before changing it.')
     link = next(r for r in address_table() if r.get('ifname', '').split('@')[0] == name)
     was_up = 'UP' in link.get('flags', [])
