@@ -53,6 +53,27 @@ def test_lease_loss_removes_only_the_address_owned_by_dhcp(tmp_path):
     assert data_dhcp.lease(admin,"eth2")["state"] == "waiting"
 
 
+def test_changed_lease_replaces_only_the_old_owned_address_and_invalidates_old_path(tmp_path,monkeypatch):
+    admin = admin_for(tmp_path)
+    monkeypatch.setattr(maintenance,'ADMIN_DIR',tmp_path)
+    data_dhcp.event(admin,'bound',ENV)
+    admin.address_table.return_value = [LINKS[0],dict(LINKS[1],addr_info=[{'family':'inet','local':'10.251.10.10','prefixlen':24}])]
+    admin.interfaces.return_value = [{'interface':'eth2','addresses':['10.251.10.10/24'],'up':True}]
+    data_dhcp.event(admin,'renew',dict(ENV,ip='10.251.10.11'))
+    assert data_dhcp.lease(admin,'eth2')['source'] == '10.251.10.11'
+    assert admin.run.call_args.args[0] == ['ip','-4','address','del','10.251.10.10/24','dev','eth2']
+    assert not traffic_paths.policy_status(dict(interface='eth2',source='10.251.10.10'))['active']
+
+
+def test_boot_does_not_restore_a_stale_dhcp_address_as_static(tmp_path):
+    admin = admin_for(tmp_path)
+    admin.atomic_json(tmp_path / traffic_paths.FILE,[dict(interface='eth2',source='10.251.10.10',address='10.251.10.10/24')])
+    admin.atomic_json(tmp_path / 'dhcp-eth2.json',{'state':'waiting'})
+    traffic_paths.restore(admin)
+    admin.configure_interface.assert_not_called()
+    admin.run.assert_not_called()
+
+
 def test_expired_lease_cannot_start_or_probe_an_old_selected_path(tmp_path,monkeypatch):
     admin = admin_for(tmp_path)
     monkeypatch.setattr(maintenance,"ADMIN_DIR",tmp_path)
