@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.12.0...v0.13.0) (2026-10-12)
+
+
+### Features
+
+* simplify network setup with automatic DHCP addressing ([#39](https://github.com/kriziw/netem-traffic-simulator/issues/39)) ([946b0bc](https://github.com/kriziw/netem-traffic-simulator/commit/946b0bca9a0afdcc09669a102ccbd36c0bfb6dd8))
+
 ## [0.12.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.11.0...v0.12.0) (2026-10-12)
 
 
