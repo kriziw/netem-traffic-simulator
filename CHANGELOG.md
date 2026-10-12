@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.11.0...v0.12.0) (2026-10-12)
+
+
+### Features
+
+* guide network setup with probe-based interface recommendations ([#37](https://github.com/kriziw/netem-traffic-simulator/issues/37)) ([e5c9ff4](https://github.com/kriziw/netem-traffic-simulator/commit/e5c9ff4e0c40072b4d0592d688c8a8b375a8b8c4))
+
 ## [0.11.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.10.0...v0.11.0) (2026-10-12)
 
 
