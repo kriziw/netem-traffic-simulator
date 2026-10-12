@@ -73,7 +73,7 @@ def collect(raw, admin):
         observations = []
         was_up = nic["up"]
         try:
-            if not was_up:
+            if hints and not was_up:
                 admin.run(["ip", "link", "set", "dev", nic["interface"], "up"])
             for hint in hints:
                 result = arp(nic["interface"], hint["gateway"])
@@ -82,7 +82,7 @@ def collect(raw, admin):
         except (ValueError, OSError):
             observations.append({"reachable": None, "message": "Cannot enable this guest link for probing."})
         finally:
-            if not was_up:
+            if hints and not was_up:
                 # Restoration failure must fail the task, not claim no mutation.
                 admin.run(["ip", "link", "set", "dev", nic["interface"], "down"])
         row = dict(interface=nic["interface"], checked_at=time.time(), addresses=nic["addresses"],

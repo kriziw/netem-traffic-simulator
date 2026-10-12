@@ -710,6 +710,9 @@ def create_app():
             hints.setdefault(kind, saved.get(role, {}).get("gateway", ""))
         if not hints.get("appliance") and saved_appliances():
             hints["appliance"] = saved_appliances()[0].get("gateway", "")
+        for kind, wan in (("isp1", "wan1"), ("isp2", "wan2")):
+            if not hints.get(kind):
+                hints[kind] = next((path["gateway"] for path in paths if path.get("mode") == "direct_netem" and path.get("wan_id") == wan), "")
         return render_template("network_setup.html", page="network_setup", system=state,
                                cards=network_setup.cards(saved, inventory, paths, management_interface()),
                                interfaces=inventory, management=management_interface(), network_error=error,
