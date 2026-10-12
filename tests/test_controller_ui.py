@@ -28,42 +28,31 @@ def test_local_ui_observes_but_cannot_issue_any_operator_command(simulator):
     assert b'Business experience targets' not in client.get('/dem').data
 
 
-def test_controller_views_require_bearer_and_fixed_paths(simulator):
+def test_html_relay_is_removed_and_commands_require_bearer(simulator):
     client = local_client(simulator)
-    endpoint = '/api/v1/controller/view'
-    assert client.post(endpoint, json={}).status_code == 401
+    assert client.post('/api/v1/controller/view', headers=auth(simulator), json={}).status_code == 404
+    assert client.get('/api/v1/controller/settings').status_code == 401
+    assert client.post('/api/v1/controller/commands/system', json={'action': 'scan'}).status_code == 401
+    assert client.post('/api/v1/controller/commands/shell', headers=auth(simulator), json={}).status_code == 400
+    assert client.post('/api/v1/controller/commands/system', headers=auth(simulator), json={'action': {}}).status_code == 400
+
+
+def test_json_experience_commands_validate_and_are_idle_only(simulator):
+    client = local_client(simulator)
+    endpoint = '/api/v1/controller/commands/experience'
     headers = auth(simulator)
-    for path in ('/api/v1/workloads/start', '/static/../../config.py', '//evil.example/', '/login'):
-        assert client.post(endpoint, headers=headers, json={'path': path}).status_code == 400
-    assert client.post(endpoint, headers=headers, json={'path': '/', 'fields': {'x': {}}}).status_code == 400
-    response = client.post(endpoint, headers=headers, json={'path': '/workloads', 'csrf_token': 'token'}).json
-    assert response['status'] == 200
-    assert 'action="/simulator/workloads/start"' in response['body']
-    assert '/simulator/static/app.js' in response['body']
-    assert 'Back to NetEm' in response['body']
-    assert b'Start simulation' not in client.get('/').data  # Trusted context did not leak.
+    assert client.post(endpoint, headers=headers, json={'voice': {'critical': True, 'deadline_ms': 200}}).status_code == 200
+    assert client.post(endpoint, headers=headers, json={'voice': {'deadline_ms': 0}}).status_code == 409
+    with patch.object(simulator.config['TRAFFICGEN_CONTROLLER'], 'status', return_value={'status': 'running'}):
+        assert client.post(endpoint, headers=headers, json={}).status_code == 409
+    assert client.post('/experience/settings', data={'csrf_token': 'token'}).status_code == 403
 
 
-def test_controller_command_uses_existing_executor_and_preserves_validation(simulator):
-    client = local_client(simulator)
-    controller = simulator.config['TRAFFICGEN_CONTROLLER']
-    with patch.object(controller, 'stop') as stop:
-        result = client.post('/api/v1/controller/view', headers=auth(simulator), json={
-            'path': '/workloads/stop', 'method': 'POST', 'csrf_token': 'token', 'fields': {'csrf_token': 'token'}}).json
-    stop.assert_called_once()
-    assert result['location'] == '/simulator/workloads'
-    assert result['status'] == 302
-    assert client.post('/workloads/stop', data={'csrf_token': 'token'}).status_code == 403
-
-
-def test_controller_static_asset_and_key_rotation(simulator):
+def test_json_key_rotation_updates_authentication_without_html(simulator):
     client = local_client(simulator)
     headers = auth(simulator)
-    asset = client.post('/api/v1/controller/view', headers=headers, json={'path': '/static/app.js'}).json
-    assert asset['status'] == 200 and 'TrafficGenControllerPrefix' in asset['body']
-    result = client.post('/api/v1/controller/view', headers=headers, json={'path': '/settings/api/rotate',
-        'method': 'POST', 'csrf_token': 'token', 'fields': {'csrf_token': 'token'}}).json
-    assert result['api_key'] != headers['Authorization'][7:]
+    result = client.post('/api/v1/controller/commands/rotate-key', headers=headers, json={})
+    assert result.status_code == 200 and result.json['api_key'] != headers['Authorization'][7:]
     assert client.get('/api/v1/status', headers=headers).status_code == 401
     assert client.get('/api/v1/status', headers=auth(simulator)).status_code == 200
 
@@ -96,7 +85,10 @@ def test_controller_retains_unverified_route_in_operator_inventory(simulator):
     settings = simulator.config['TRAFFICGEN_SETTINGS']
     (settings.runtime_dir / network_setup.FILE).write_text(json.dumps({'appliance': row}))
     client = local_client(simulator)
-    body = client.post('/api/v1/controller/view', headers=auth(simulator), json={'path': '/traffic-paths'}).json['body']
-    assert 'Saved paths · not verified' in body
-    assert 'SD-WAN appliance' in body and 'Verify / retry' in body
-    assert '/simulator/settings/network-setup?interface=eth1' in body
+    with patch('trafficgen.controller_api.interfaces', return_value=[]):
+        reply = client.get('/api/v1/controller/settings', headers=auth(simulator))
+    assert reply.status_code == 200
+    cards = reply.json['network']['cards']
+    draft = next(card for card in cards if card['role'] == 'appliance')
+    assert draft['name'] == 'SD-WAN appliance' and draft['path'] is None
+    assert 'body' not in reply.json and 'location' not in reply.json

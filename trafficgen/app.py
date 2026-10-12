@@ -250,7 +250,7 @@ def create_app():
     def serialize_routing_requests():
         if request.method in ("POST", "PUT", "DELETE") and request.endpoint in (
                 "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
-                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe", "network_setup_dhcp"):
+                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe", "network_setup_dhcp", "controller_command"):
             appliance_inventory_lock.acquire()
             g.appliance_inventory_lock = True
 
@@ -338,6 +338,52 @@ def create_app():
         state["appliances"] = saved_appliances()
         return state
 
+    def execute_system_action(raw):
+        action = raw.get("action", "")
+        host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface", "target_install"))
+        if action == "save_appliance":
+            policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+            route = validate_route(dict(raw), policy.get("management_interface", "eth0"))
+            name = raw.get("name", "").strip()[:80]
+            vendor = raw.get("vendor", "Other")
+            if not name or vendor not in VENDORS:
+                raise ValueError("Provide an appliance name and supported vendor label.")
+            rows = saved_appliances()
+            if len(rows) >= 20:
+                raise ValueError("Up to 20 appliances can be saved.")
+            rows.append({**route, "name": name, "vendor": vendor, "model": raw.get("model", "")[:80], "firmware": raw.get("firmware", "")[:40], "id": secrets.token_hex(8)})
+            _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
+        elif action == "repair":
+            enqueue_repair()
+        elif action == "delete_appliance":
+            rows = [row for row in saved_appliances() if row["id"] != raw.get("appliance_id")]
+            _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
+        else:
+            payload = {}
+            if action == "route":
+                payload = next((row for row in saved_appliances() if row["id"] == raw.get("appliance_id")), None)
+                if payload is None:
+                    raise ValueError("Choose a saved appliance.")
+            elif action == "configure_inventory":
+                policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                payload = validate_config(dict(raw), policy.get("management_interface", "eth0"))
+            elif action == "configure_interface":
+                policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                payload = validate_interface(dict(raw), policy.get("management_interface", "eth0"))
+            elif action == "forget_interface":
+                payload = {"interface": raw.get("interface", "")}
+            elif action == "install_update":
+                if not maintenance.release_status().get("available"):
+                    raise ValueError(f"v{__version__} is already the latest checked release. Check for updates again.")
+                payload = {"tag": raw.get("tag", "")}
+            elif action == "configure_target":
+                policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
+                payload = remote_target.validate_config(dict(raw), policy.get("management_interface", "eth0"))
+            elif action == "target_install":
+                payload = {"tag": raw.get("tag", "")}
+            maintenance.enqueue(settings, action, payload)
+        return {"message": "Task accepted. Follow its progress below."}
+
     @app.get("/settings/system")
     @admin_required
     def system_settings():
@@ -352,54 +398,9 @@ def create_app():
     @app.post("/settings/system/action")
     @admin_required
     def system_action():
-        action = request.form.get("action", "")
         try:
-            host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface", "target_install"))
-            if action == "save_appliance":
-                policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
-                route = validate_route(dict(request.form), policy.get("management_interface", "eth0"))
-                name = request.form.get("name", "").strip()[:80]
-                vendor = request.form.get("vendor", "Other")
-                if not name or vendor not in VENDORS:
-                    raise ValueError("Provide an appliance name and supported vendor label.")
-                rows = saved_appliances()
-                if len(rows) >= 20:
-                    raise ValueError("Up to 20 appliances can be saved.")
-                rows.append({**route, "name": name, "vendor": vendor, "model": request.form.get("model", "")[:80], "firmware": request.form.get("firmware", "")[:40], "id": secrets.token_hex(8)})
-                _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
-                flash("Appliance saved. Select it below to verify and apply its traffic route.", "success")
-            elif action == "repair":
-                enqueue_repair()
-                flash("Repair queued: restoring the data interface and the appliance route, then checking the target.", "info")
-            elif action == "delete_appliance":
-                rows = [row for row in saved_appliances() if row["id"] != request.form.get("appliance_id")]
-                _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
-                flash("Saved appliance removed. Any active route remains until cleared or changed.", "info")
-            else:
-                payload = {}
-                if action == "route":
-                    payload = next((row for row in saved_appliances() if row["id"] == request.form.get("appliance_id")), None)
-                    if payload is None:
-                        raise ValueError("Choose a saved appliance.")
-                elif action == "configure_inventory":
-                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
-                    payload = validate_config(dict(request.form), policy.get("management_interface", "eth0"))
-                elif action == "configure_interface":
-                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
-                    payload = validate_interface(dict(request.form), policy.get("management_interface", "eth0"))
-                elif action == "forget_interface":
-                    payload = {"interface": request.form.get("interface", "")}
-                elif action == "install_update":
-                    if not maintenance.release_status().get("available"):
-                        raise ValueError(f"v{__version__} is already the latest checked release. Check for updates again.")
-                    payload = {"tag": request.form.get("tag", "")}
-                elif action == "configure_target":
-                    policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
-                    payload = remote_target.validate_config(dict(request.form), policy.get("management_interface", "eth0"))
-                elif action == "target_install":
-                    payload = {"tag": request.form.get("tag", "")}
-                maintenance.enqueue(settings, action, payload)
-                flash("Task queued. Its result will appear below without refreshing the page.", "info")
+            execute_system_action(request.form)
+            flash("Task accepted. Follow its progress below.", "info")
         except (ValueError, OSError) as exc:
             flash(str(exc), "error")
         return redirect(url_for("system_settings"))
@@ -799,6 +800,32 @@ def create_app():
                                probe_report=maintenance.read_json(maintenance.ADMIN_DIR / setup_probe.FILE, {}), probe_hints=hints, now=time.time(),
                                busy=state["busy"] or app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"))
 
+    def execute_setup(raw):
+        host_available(require_idle=True)
+        if raw.get("wiring_confirmed") != "1":
+            raise ValueError("Confirm this interface is attached to the bridge shown in Proxmox.")
+        saved = maintenance.read_json(settings.runtime_dir / network_setup.FILE, {})
+        previous = saved.get(raw.get("role"))
+        if not previous:
+            existing = network_setup.cards({}, interfaces(management_interface()),
+                maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []), management_interface())
+            previous = next((card for card in existing if card["role"] == raw.get("role")), None)
+        row = network_setup.definition(raw, previous, management_interface())
+        action = raw.get("action")
+        if action not in ("save", "configure", "save_interface"):
+            raise ValueError("Choose Save interface or Verify traffic path.")
+        if any(other.get("source") == row["source"] for role, other in saved.items() if role != row["role"]):
+            raise ValueError("Each path needs its own simulator source address.")
+        if action in ("configure", "save_interface"):
+            validate_interface({"interface": row["interface"], "address": row["address"]}, management_interface())
+            task = {"path": network_setup.payload(row), "address": row["address"]}
+            if action == "save_interface":
+                task["verify"] = False
+            maintenance.enqueue(settings, "setup_path", task)
+        saved[row["role"]] = row
+        _write_secret(settings.runtime_dir / network_setup.FILE, json.dumps(saved))
+        return {"message": "Interface save queued without verification." if action == "save_interface" else "Traffic path verification queued." if action == "configure" else "Plan saved.", "path": row}
+
     @app.get('/settings/network-setup/status')
     @admin_required
     def network_setup_status():
@@ -848,29 +875,8 @@ def create_app():
     def network_setup_action():
         row = None
         try:
-            host_available(require_idle=True)
-            if request.form.get("wiring_confirmed") != "1":
-                raise ValueError("Confirm this interface is attached to the bridge shown in Proxmox.")
-            saved = maintenance.read_json(settings.runtime_dir / network_setup.FILE, {})
-            previous = saved.get(request.form.get("role"))
-            if not previous:
-                existing = network_setup.cards({}, interfaces(management_interface()),
-                    maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []), management_interface())
-                previous = next((card for card in existing if card["role"] == request.form.get("role")), None)
-            row = network_setup.definition(request.form, previous, management_interface())
+            row = execute_setup(request.form)["path"]
             action = request.form.get("action")
-            if action not in ("save", "configure", "save_interface"):
-                raise ValueError("Choose Save interface or Verify traffic path.")
-            if any(other.get("source") == row["source"] for role, other in saved.items() if role != row["role"]):
-                raise ValueError("Each path needs its own simulator source address.")
-            if action in ("configure", "save_interface"):
-                validate_interface({"interface": row["interface"], "address": row["address"]}, management_interface())
-                task = {"path": network_setup.payload(row), "address": row["address"]}
-                if action == "save_interface":
-                    task["verify"] = False
-                maintenance.enqueue(settings, "setup_path", task)
-            saved[row["role"]] = row
-            _write_secret(settings.runtime_dir / network_setup.FILE, json.dumps(saved))
             flash("Setup queued: enabling and saving the interface, then verifying the path. Refresh status for the result." if action == "configure"
                   else "Interface save queued without verification. It will remain unverified until the traffic path check passes." if action == "save_interface"
                   else "Plan saved. Verify traffic path applies it inside the simulator.", "warning" if action == "save_interface" else "success")
@@ -917,7 +923,7 @@ def create_app():
             "instance_name": settings.instance_name,
             # NetEm compares this with its own clock; components must agree on the time.
             "time": time.time(),
-            "role": "executor", "controller_ui": True, "controller_leases": True,
+            "role": "executor", "controller_settings_api": True, "controller_leases": True,
             "clock": clock_report(),
         }
 
@@ -1152,8 +1158,8 @@ def create_app():
         return jsonify({"runs": recent_runs(settings.database_path, 50)})
 
     atexit.register(app.config["TRAFFICGEN_CONTROLLER"].shutdown)
-    from .controller_ui import install as install_controller_ui
-    install_controller_ui(app)
+    from .controller_api import install
+    install(app, settings, system_snapshot, management_interface, host_available, execute_setup, execute_system_action)
     return app
 
 
