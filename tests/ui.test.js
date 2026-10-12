@@ -53,7 +53,7 @@ test('selecting an appliance prefills identity and routing fields while preservi
   fields['appliance-target']={value:'198.18.0.1'};fields['detected-appliance-details']={textContent:''};
   const ctx={window:{},document:{addEventListener(){},getElementById:id=>fields[id]}};
   vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
-  ctx.window.TrafficGen.fillAppliance({candidateInterface:'eth1',candidateGateway:'10.250.10.1',candidateName:'FortiGate',candidateVendor:'Fortinet',candidateModel:'FortiGate-VM64',candidateFirmware:'7.6.7',candidateEvidence:'Proxmox Â· inventory label'});
+  ctx.window.TrafficGen.fillAppliance({candidateInterface:'eth1',candidateGateway:'10.250.10.1',candidateName:'FortiGate',candidateVendor:'Fortinet',candidateModel:'FortiGate-VM64',candidateFirmware:'7.6.7',candidateEvidence:'Proxmox · inventory label'});
   assert.equal(fields['appliance-interface'].value,'eth1');assert.equal(fields['appliance-name'].value,'FortiGate');
   assert.equal(fields['appliance-vendor'].value,'Fortinet');assert.equal(fields['appliance-model'].value,'FortiGate-VM64');
   assert.equal(fields['appliance-firmware'].value,'7.6.7');assert.equal(fields['appliance-target'].value,'198.18.0.1');
@@ -67,13 +67,13 @@ test('diagnosis renders escaped findings, per-WAN rows and the application timin
     egress:{'198.18.2.2':{requests:10,experience_score:70,availability_pct:70,p95_ms:30,causes:{media_loss:3},applications:{video:{requests:10,failures:3,availability_pct:70}}}}};
   const findings=ui.findingsHtml(diagnosis);
   assert.match(findings,/&lt;b&gt;3&lt;\/b&gt;/);assert.doesNotMatch(findings,/<b>/);
-  assert.match(findings,/Seen via 198\.18\.2\.2 Ã—3/);assert.match(findings,/198\.18\.1\.2 \(P95 4\.4 s, 11\.2 Mbit\/s\)/);
+  assert.match(findings,/Seen via 198\.18\.2\.2 ×3/);assert.match(findings,/198\.18\.1\.2 \(P95 4\.4 s, 11\.2 Mbit\/s\)/);
   assert.match(ui.findingsHtml({findings:[]}),/No problems detected/);
   const egress=ui.egressRowsHtml(diagnosis);
-  assert.match(egress,/Media packet loss Ã—3/);assert.match(egress,/video 70\.0%/);
+  assert.match(egress,/Media packet loss ×3/);assert.match(egress,/video 70\.0%/);
   const apps=ui.appRowsHtml({updates:{experience_score:60,availability_pct:100,p95_ms:4400,p95_wait_ms:100,p95_transfer_ms:4300,median_down_mbps:11.2,requests:6,causes:{}},
     video:{experience_score:70,availability_pct:70,p95_ms:30,media:{loss_pct:0.4,bursts:10,bursts_with_loss:3,no_reply:0},top_cause:'media_loss',causes:{media_loss:3},requests:10}},diagnosis.cause_labels);
-  assert.match(apps,/4\.3 s/);assert.match(apps,/â†“ 11\.2 Mbit\/s/);assert.match(apps,/0\.40% Â· 3\/10 bursts/);assert.match(apps,/Media packet loss Ã—3/);
+  assert.match(apps,/4\.3 s/);assert.match(apps,/↓ 11\.2 Mbit\/s/);assert.match(apps,/0\.40% · 3\/10 bursts/);assert.match(apps,/Media packet loss ×3/);
 });
 
 test('target update controls reflect remote state and never enable installation during a workload',()=>{
