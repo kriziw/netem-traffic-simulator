@@ -392,6 +392,12 @@ def process_request():
         elif job['action'] == 'remove_path':
             from .traffic_paths import remove
             result = remove(str(payload.get('id', '')), sys.modules[__name__])
+        elif job['action'] == 'setup_path':
+            from .network_setup import configure
+            result = configure(payload, sys.modules[__name__])
+        elif job['action'] == 'probe_setup':
+            from .setup_probe import collect
+            result = collect(payload, sys.modules[__name__])
         elif job['action'] == 'configure_inventory':
             result = inventory_configure(payload)
         elif job['action'] == 'disconnect_inventory':

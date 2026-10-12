@@ -43,9 +43,11 @@ from .profiles import profile_payload
 from . import maintenance
 from . import remote_target
 from . import traffic_paths
+from . import network_setup
+from . import setup_probe
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
-from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness
+from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness, address_table
 
 
 def target_egress(host):
@@ -224,7 +226,7 @@ def create_app():
     def serialize_routing_requests():
         if request.method in ("POST", "PUT", "DELETE") and request.endpoint in (
                 "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
-                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui"):
+                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe"):
             appliance_inventory_lock.acquire()
             g.appliance_inventory_lock = True
 
@@ -692,6 +694,86 @@ def create_app():
         return render_template("traffic_paths.html", page="paths", paths=maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []),
                                selected=maintenance.status(settings).get("selected") or {}, health=dict(path_health_cache), now=time.time(),
                                job=maintenance.status(settings).get("job") or {}, new_id=secrets.token_hex(16))
+
+    def setup_page(overrides=None):
+        saved = maintenance.read_json(settings.runtime_dir / network_setup.FILE, {})
+        saved.update(overrides or {})
+        state = maintenance.status(settings)
+        error = None
+        try:
+            inventory = interfaces(management_interface())
+        except (ValueError, OSError) as exc:
+            inventory, error = [], str(exc)
+        paths = maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])
+        hints = maintenance.read_json(settings.runtime_dir / "setup-probe-hints.json", {})
+        for role, kind in (("appliance", "appliance"), ("wan1", "isp1"), ("wan2", "isp2")):
+            hints.setdefault(kind, saved.get(role, {}).get("gateway", ""))
+        if not hints.get("appliance") and saved_appliances():
+            hints["appliance"] = saved_appliances()[0].get("gateway", "")
+        for kind, wan in (("isp1", "wan1"), ("isp2", "wan2")):
+            if not hints.get(kind):
+                hints[kind] = next((path["gateway"] for path in paths if path.get("mode") == "direct_netem" and path.get("wan_id") == wan), "")
+        return render_template("network_setup.html", page="network_setup", system=state,
+                               cards=network_setup.cards(saved, inventory, paths, management_interface()),
+                               interfaces=inventory, management=management_interface(), network_error=error,
+                               probe_report=maintenance.read_json(maintenance.ADMIN_DIR / setup_probe.FILE, {}), probe_hints=hints, now=time.time(),
+                               busy=state["busy"] or app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"))
+
+    @app.post("/settings/network-setup/probe")
+    @admin_required
+    def network_setup_probe():
+        try:
+            host_available(require_idle=True)
+            hints = {kind: request.form.get(kind + "_gateway", "").strip() for kind in setup_probe.HINTS}
+            payload = {"gateways": [{"kind": kind, "gateway": gateway} for kind, gateway in hints.items() if gateway]}
+            setup_probe.validate(payload, address_table(), management_interface())
+            maintenance.enqueue(settings, "probe_setup", payload)
+            _write_secret(settings.runtime_dir / "setup-probe-hints.json", json.dumps(hints))
+            flash("Interface probes queued. Refresh status when the task completes to see evidence and recommendations.", "info")
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("network_setup_ui") + "#interface-probes")
+
+    @app.get("/settings/network-setup")
+    @admin_required
+    def network_setup_ui():
+        return setup_page()
+
+    @app.post("/settings/network-setup")
+    @admin_required
+    def network_setup_action():
+        row = None
+        try:
+            host_available(require_idle=True)
+            if request.form.get("wiring_confirmed") != "1":
+                raise ValueError("Confirm this interface is attached to the bridge shown in Proxmox.")
+            saved = maintenance.read_json(settings.runtime_dir / network_setup.FILE, {})
+            previous = saved.get(request.form.get("role"))
+            if not previous:
+                existing = network_setup.cards({}, interfaces(management_interface()),
+                    maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []), management_interface())
+                previous = next((card for card in existing if card["role"] == request.form.get("role")), None)
+            row = network_setup.definition(request.form, previous, management_interface())
+            action = request.form.get("action")
+            if action not in ("save", "configure"):
+                raise ValueError("Choose Save plan or Configure & verify.")
+            if any(other.get("source") == row["source"] for role, other in saved.items() if role != row["role"]):
+                raise ValueError("Each path needs its own simulator source address.")
+            if action == "configure":
+                validate_interface({"interface": row["interface"], "address": row["address"]}, management_interface())
+                maintenance.enqueue(settings, "setup_path", {"path": network_setup.payload(row), "address": row["address"]})
+            saved[row["role"]] = row
+            _write_secret(settings.runtime_dir / network_setup.FILE, json.dumps(saved))
+            flash("Setup queued: enabling and saving the interface, then verifying the path. Refresh status for the result." if action == "configure"
+                  else "Plan saved. Configure & verify applies it inside the simulator.", "success")
+            return redirect(url_for("network_setup_ui") + "#" + row["role"])
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+            # Keep entered fields visible after a failed submission.
+            role = request.form.get("role")
+            allowed = {item[0] for item in network_setup.ROLES}
+            override = {role: {key: request.form.get(key, "") for key in ("name", "bridge", "interface", "address", "gateway", "target", "wan_id")}} if role in allowed else {}
+            return setup_page(override), 400
 
     @app.post("/traffic-paths/action")
     @admin_required

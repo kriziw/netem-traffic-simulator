@@ -109,3 +109,16 @@ test('target panel warns when the target and simulator run different releases',(
   ctx.window.TrafficGen.renderTargetState(state);
   assert.match(fields['target-version-match'].textContent,/Matches this simulator/);
 });
+
+
+test('network setup replaces the source when changing NIC and requires wiring reconfirmation',()=>{
+  let change;
+  const nic={selectedOptions:[{dataset:{address:'10.252.10.10/24'}}],addEventListener:(name,fn)=>{change=fn;}};
+  const address={value:'10.251.10.10/24'},confirmation={checked:true};
+  const form={querySelector:selector=>selector.includes('interface')?nic:selector.includes('address')?address:confirmation};
+  const ctx={window:{},document:{addEventListener(){},querySelectorAll:selector=>selector==='[data-setup-form]'?[form]:[]}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  ctx.window.TrafficGen.networkSetup();change();
+  assert.equal(address.value,'10.252.10.10/24');assert.equal(confirmation.checked,false);
+  nic.selectedOptions=[{dataset:{address:''}}];change();assert.equal(address.value,'');
+});

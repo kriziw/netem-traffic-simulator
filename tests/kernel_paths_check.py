@@ -63,7 +63,7 @@ def client(record, fail=False):
 def main():
     if os.geteuid() != 0:
         raise SystemExit("This isolated kernel check requires root on the CI runner")
-    from trafficgen import host_admin as admin, network, traffic_paths
+    from trafficgen import host_admin as admin, network, traffic_paths, network_setup
     original_run = network.run
     marker = uuid.uuid4().hex[:8]
     simulator_ns, router_ns = "nps-" + marker, "npr-" + marker
@@ -102,7 +102,18 @@ def main():
             for index, mode in enumerate(("appliance", "direct_netem", "direct_baseline"), 1):
                 payload = {"id": str(index) * 32, "name": mode, "mode": mode, "wan_id": "wan1" if mode == "direct_netem" else "",
                            "interface": "eth" + str(index), "gateway": f"10.{250+index}.10.1", "source": f"10.{250+index}.10.10", "target": "198.18.0.1"}
-                records.append(traffic_paths.configure(payload, admin)["path"])
+                if index == 1:
+                    # Exercise the guided task on a down, unaddressed guest NIC.
+                    scoped(["ip", "-4", "address", "del", payload["source"] + "/24", "dev", payload["interface"]])
+                    scoped(["ip", "link", "set", payload["interface"], "down"])
+                    # ARP evidence can be collected before any IP is assigned.
+                    scoped(["ip", "link", "set", payload["interface"], "up"])
+                    subprocess.run(["ip", "netns", "exec", simulator_ns, sys.executable, script, "arp", payload["interface"], payload["gateway"]], check=True)
+                    assert not next(nic for nic in network.interfaces() if nic["interface"] == payload["interface"])["addresses"]
+                    scoped(["ip", "link", "set", payload["interface"], "down"])
+                    records.append(network_setup.configure({"path": payload, "address": payload["source"] + "/24"}, admin)["path"])
+                else:
+                    records.append(traffic_paths.configure(payload, admin)["path"])
             # A selected full-workload path coexists with independently bound
             # HTTP and UDP on every other interface, even to the same target.
             for selected in records:
@@ -134,5 +145,10 @@ if __name__ == "__main__":
         server()
     elif len(sys.argv) > 1 and sys.argv[1] in ("client", "fail"):
         client(json.loads(sys.argv[2]), fail=sys.argv[1] == "fail")
+    elif len(sys.argv) > 1 and sys.argv[1] == "arp":
+        from trafficgen.setup_probe import arp
+        result = arp(sys.argv[2], sys.argv[3])
+        assert result["reachable"] is True and result["mac"], result
+        print("PASS: unaddressed data NIC received actual gateway ARP evidence")
     else:
         main()

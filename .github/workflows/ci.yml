@@ -52,6 +52,7 @@ jobs:
               "api.html",
               "system.html",
               "traffic_paths.html",
+              "network_setup.html",
           ]
           for template in templates:
               app.jinja_env.get_template(template)
@@ -60,7 +61,10 @@ jobs:
           PY
 
       - name: Verify isolated Linux traffic policies
-        run: sudo "$(command -v python)" tests/kernel_paths_check.py
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y iputils-arping
+          sudo "$(command -v python)" tests/kernel_paths_check.py
 
       - uses: actions/setup-node@v4
         with:

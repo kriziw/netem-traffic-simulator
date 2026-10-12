@@ -14,7 +14,7 @@ fi
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync git iproute2 iputils-ping curl
+apt-get install -y python3 python3-venv python3-pip python3-dev build-essential openssl ca-certificates rsync git iproute2 iputils-ping iputils-arping curl
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$RUNTIME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"

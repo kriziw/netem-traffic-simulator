@@ -43,6 +43,45 @@ Use the simulator's existing interface configuration tools after wiring the NICs
 Verify the physical path with WAN counters during the first calibration workload:
 successful kernel/target checks alone cannot prove which external bridge was crossed.
 
+## Guided network setup
+
+Open **Network setup** in the simulator. Attach data NICs in Proxmox, then refresh.
+The page detects guest interfaces and prefills single existing IPv4 addresses.
+Default role suggestions use eth1-eth5. **Probe detected interfaces** uses known
+appliance/ISP gateway hints to send a bounded ARP request on up to six data NICs,
+including unaddressed ones. Up to six gateway hints and two addressed vendor
+identity checks are allowed. Existing neighbor and LLDP evidence is included
+when available. Down links are enabled briefly and restored; the probe assigns
+no guest addresses or routes. Missing tools/permissions and absent replies yield
+Unknown, not a device-down verdict. Without a known gateway or neighbor evidence,
+it cannot infer an arbitrary subnet.
+
+Fresh gateway replies produce role candidates that can prefill the NIC and
+gateway in a setup card. ISP gateway reachability always remains ambiguous
+between a NetEm calibration interface and a clean baseline; confirm the bridge
+attachment in Proxmox. Recommendations expire after 15 minutes and never apply
+networking automatically.
+The editable template maps management to vmbr0, appliance LAN to vmbr3,
+WAN1/WAN2 calibration to vmbr1/vmbr2, and clean baselines to vmbr4/vmbr5.
+Bridge labels are wiring guidance, not discovery or Proxmox provisioning.
+
+Enter a unique simulator IPv4/prefix, gateway, controlled target data IP and
+NetEm WAN ID for calibration. **Save plan** persists a draft without networking
+changes. **Configure address & verify path** queues guest interface validation,
+address enablement/persistence and source-bound path verification as one task.
+It does not select the workload path or add a default gateway. After success,
+open **Traffic paths** and select **Use for full workload**.
+
+If target verification fails, the address remains saved for diagnosis; the
+previous workload selection is retained. Configuration is blocked during runs
+or administration tasks. Conflicting existing addresses must be changed in
+Proxmox. Changed source/interface/target definitions create a new policy;
+remove unused older policies from Traffic paths.
+
+Calibration and baseline NICs sharing an ISP subnet need explicit ARP/address
+handling and symmetric return routing. Prefer a separate baseline router
+subnet/VLAN. Confirm physical traversal with WAN counters before scaling up.
+
 ## Configuration and selection
 
 In NetEm, use **Platform Health → Traffic steering**. Select appliance paths from

@@ -47,6 +47,7 @@ window.TrafficGen = (() => {
   }
   document.addEventListener('submit',async event=>{
     const form=event.target;if(event.defaultPrevented||!(form instanceof HTMLFormElement)||form.method.toLowerCase()!=='post')return;
+    if(form.dataset?.nativeSubmit==='true')return;
     const action=new URL(form.getAttribute('action')||location.href,location.href);if(action.origin!==location.origin)return;
     event.preventDefault();if(busy)return;busy=true;
     const data=new FormData(form);if(event.submitter?.name)data.append(event.submitter.name,event.submitter.value);
@@ -316,5 +317,23 @@ window.TrafficGen = (() => {
       }catch(_){}
     }poll();repeat(poll,2000);
   }
-  return {liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
+  function networkSetup(){
+    document.querySelectorAll('[data-setup-form]').forEach(form=>{
+      const nic=form.querySelector('[data-setup-interface]');
+      const address=form.querySelector('[data-setup-address]');
+      nic.addEventListener('change',()=>{
+        address.value=nic.selectedOptions[0]?.dataset.address||'';
+        form.querySelector('[name="wiring_confirmed"]').checked=false;
+      });
+    });
+    document.querySelectorAll('[data-use-probe-role]').forEach(button=>button.addEventListener('click',()=>{
+      const role=button.dataset.useProbeRole;
+      const nic=document.getElementById(role+'-interface');
+      if(!nic||![...nic.options].some(option=>option.value===button.dataset.probeInterface))return;
+      nic.value=button.dataset.probeInterface;nic.dispatchEvent(new Event('change'));
+      document.getElementById(role+'-gateway').value=button.dataset.probeGateway;
+      document.getElementById(role).scrollIntoView({block:'start',behavior:'smooth'});
+    }));
+  }
+  return {networkSetup,liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
 })();
