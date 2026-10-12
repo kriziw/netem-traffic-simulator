@@ -1,5 +1,10 @@
 # NetEm Traffic Simulator
 
+The full HTTP/UDP workload can be pinned to an appliance, a direct NetEm/ISP path,
+or a clean router baseline while independent health probes use other interfaces.
+See [purpose-based traffic paths](docs/TRAFFIC-PATHS.md) for Proxmox wiring,
+source addresses, router return routes and selection.
+
 Corporate endpoint traffic simulation and Digital Experience Monitoring (DEM) companion for **NetEm WAN Lab**.
 
 The simulator uses [Locust](https://github.com/locustio/locust) as the proven workload execution engine and adds the parts that are specific to the NetEm resilience-lab use case:

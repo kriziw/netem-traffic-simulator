@@ -1,5 +1,9 @@
 # API
 
+Purpose-based full-workload routing and independent health probes are documented
+in [Traffic paths](TRAFFIC-PATHS.md). All path configuration/selection endpoints
+require the simulator integration key and use the verified host queue.
+
 ## NetEm appliance inventory and platform health
 
 These simulator endpoints require its Bearer integration key:

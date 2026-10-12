@@ -123,6 +123,10 @@ class CorporateUser(HttpUser):
         self.udp_host = target.hostname or "127.0.0.1"
         self.udp_port = int(cfg["udp_port"])
         self.client.trust_env = False
+        source = (cfg.get("traffic_path") or {}).get("source")
+        if source:
+            from .traffic_paths import bind_http
+            bind_http(self.client, source)
         self.client.request = self._bounded_request(self.client.request)
         self.mix_revision = cfg.get("mix_revision", 0)
 
@@ -266,6 +270,9 @@ class CorporateUser(HttpUser):
         try:
             family, kind, protocol, _, address = socket.getaddrinfo(self.udp_host, self.udp_port, type=socket.SOCK_DGRAM)[0]
             sock = socket.socket(family, kind, protocol)
+            source = (self.runtime_config.get("traffic_path") or {}).get("source")
+            if source:
+                sock.bind((source, 0))
             sock.connect(address)
             sock.settimeout(0.1)
 
@@ -586,12 +593,14 @@ class WorkloadController:
             "mix_revision": 0,
         }
 
-    def start(self, raw: dict):
+    def start(self, raw: dict, traffic_path=None):
         with self.lock:
             if self.run and self.run.get("status") in ("starting", "running", "stopping"):
                 raise RuntimeError("A workload is already running.")
 
             run = self._validate_start(raw)
+            if traffic_path:
+                run["traffic_path"] = copy.deepcopy(traffic_path)
             runtime_config = run
             user_class = type(
                 "ConfiguredCorporateUser",
@@ -652,7 +661,13 @@ class WorkloadController:
         # An outdated target cannot report the WAN and may not echo media at all.
         info = {"checked_at": time.time(), "version": None, "capabilities": [], "error": None}
         try:
-            response = requests.get(target + "/health", timeout=(3, 3), allow_redirects=False)
+            source = ((self.run or {}).get("traffic_path") or {}).get("source")
+            if source:
+                from .traffic_paths import bind_http
+                with bind_http(requests.Session(), source) as bound:
+                    response = bound.get(target + "/health", timeout=(3, 3), allow_redirects=False)
+            else:
+                response = requests.get(target + "/health", timeout=(3, 3), allow_redirects=False)
             response.raise_for_status()
             if response.status_code != 200:
                 raise ValueError(f"Target health returned HTTP {response.status_code}")

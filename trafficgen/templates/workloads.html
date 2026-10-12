@@ -10,6 +10,8 @@
   </div>
 </div>
 
+<p class="field-help">Every configured path supports the full HTTP/UDP workload and user count. <a href="{{ url_for('traffic_paths_ui') }}">Choose the workload path</a> before starting. {% if status.run and status.run.get('traffic_path') %}This run: {{ status.run.traffic_path.name }} · {{ status.run.traffic_path.mode|replace('_',' ') }}.{% endif %}</p>
+
 {% if status.status in ('starting','running') %}
 <section class="card running-card">
   <div class="card-head">
