@@ -1,5 +1,28 @@
 # API
 
+## NetEm appliance inventory and platform health
+
+These simulator endpoints require its Bearer integration key:
+
+- `PUT /api/v1/network/appliances/<id>` registers or updates a saved appliance
+  without changing live routing. IDs are 16–32 lowercase hex characters. Accepted
+  fields: name, vendor, model, firmware, interface, gateway and target. The gateway
+  must be on a directly connected data LAN; target must be in `198.18.0.0/15`.
+  Unknown fields, management-interface routing, active workloads and pending host
+  tasks are refused. Successful registration is idempotent and returns
+  `{"appliance": {...}, "routing_changed": false}`.
+- Existing `POST /api/v1/network/select` with `{"appliance_id":"..."}` uses the
+  privileged queue to verify and apply that appliance's target route. Registration
+  alone never selects an appliance.
+- `GET /api/v1/target/health` freshly checks the configured target management API,
+  independently of the data path. Returns configured/connected status, version,
+  readiness and safe job/release metadata. Target keys remain private on the
+  simulator. An unconfigured connection is explicitly reported.
+
+NetEm stores the full inventory and observations in its own database and monitors
+vendor devices independently. This API is its routing projection; it does not
+store vendor credentials or perform vendor health/license checks.
+
 ## Controlled target management
 
 The optional target manager uses HTTPS port 8091 on the modem management address.

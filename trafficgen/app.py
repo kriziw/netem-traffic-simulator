@@ -7,6 +7,8 @@ import os
 import hmac
 import secrets
 import subprocess
+import re
+import threading
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 import time
@@ -14,6 +16,7 @@ import time
 from flask import (
     Flask,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -202,6 +205,22 @@ def create_app():
     def saved_appliances():
         rows = maintenance.read_json(settings.runtime_dir / "appliances.json", [])
         return rows if isinstance(rows, list) else []
+
+    appliance_inventory_lock = threading.RLock()
+
+    @app.before_request
+    def serialize_routing_requests():
+        if request.method in ("POST", "PUT") and request.endpoint in (
+                "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
+                "api_workload_start", "workload_start_ui"):
+            appliance_inventory_lock.acquire()
+            g.appliance_inventory_lock = True
+
+    @app.teardown_request
+    def release_routing_request(_error):
+        if getattr(g, "appliance_inventory_lock", False):
+            g.appliance_inventory_lock = False
+            appliance_inventory_lock.release()
 
     def network_readiness(check_target=True, inventory=None):
         """Whether workloads reach the controlled target through the appliance right now."""
@@ -512,6 +531,53 @@ def create_app():
             return jsonify(enqueue_repair()), 202
         except (ValueError, OSError) as exc:
             return {"error": str(exc)}, 409
+
+    @app.put("/api/v1/network/appliances/<appliance_id>")
+    @bearer_required
+    def api_network_appliance_save(appliance_id):
+        """Idempotent registration from NetEm; does not change live routing."""
+        try:
+            if not re.fullmatch(r"[a-f0-9]{16,32}", appliance_id):
+                raise ValueError("Invalid appliance inventory ID.")
+            data = request.get_json(silent=True)
+            allowed = {"name", "vendor", "model", "firmware", "interface", "gateway", "target"}
+            if not isinstance(data, dict) or set(data) - allowed:
+                raise ValueError("Provide appliance metadata and a constrained target route only.")
+            host_available(require_idle=True)
+            with appliance_inventory_lock:
+                route = validate_route(data, management_interface())
+                name = str(data.get("name") or "").strip()
+                vendor = data.get("vendor")
+                if not name or len(name) > 80 or vendor not in VENDORS:
+                    raise ValueError("Provide a supported vendor and name (up to 80 characters).")
+                rows = saved_appliances()
+                old = next((row for row in rows if row["id"] == appliance_id), None)
+                if not old and len(rows) >= 100:
+                    raise ValueError("Inventory is limited to 100 appliances.")
+                record = dict(route, id=appliance_id, name=name, vendor=vendor,
+                              model=str(data.get("model") or "")[:80], firmware=str(data.get("firmware") or "")[:40])
+                rows = [row for row in rows if row["id"] != appliance_id] + [record]
+                _write_secret(settings.runtime_dir / "appliances.json", json.dumps(rows))
+            return jsonify({"appliance": record, "routing_changed": False}), 200
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
+    @app.get("/api/v1/target/health")
+    @bearer_required
+    def api_target_health():
+        """Fresh target management service status, separately from the workload path."""
+        config = maintenance.read_json(maintenance.ADMIN_DIR / remote_target.SECRET_FILE)
+        if not config:
+            return jsonify({"configured": False, "connected": False, "checked_at": time.time()})
+        try:
+            trusted = remote_target.validate_config(config, management_interface())
+            reply = remote_target.Client(trusted).request("GET", "/api/v1/status")
+            public = remote_target.public_status(reply, trusted)
+            public.update(configured=True, **remote_target.compare_versions(public.get("version"), __version__))
+            return jsonify(public)
+        except (ValueError, OSError):
+            return jsonify({"configured": True, "connected": False, "checked_at": time.time(),
+                            "message": "Cannot verify target management service. Check its connection and certificate."})
 
     @app.post("/api/v1/network/select")
     @bearer_required
