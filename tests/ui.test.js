@@ -122,3 +122,19 @@ test('network setup replaces the source when changing NIC and requires wiring re
   assert.equal(address.value,'10.252.10.10/24');assert.equal(confirmation.checked,false);
   nic.selectedOptions=[{dataset:{address:''}}];change();assert.equal(address.value,'');
 });
+
+
+test('simple setup enables valid manual settings and preserves edits during background DHCP updates',async()=>{
+  let input,pollTick,requests=0;
+  const address={value:'10.251.10.10/24'},gateway={value:'10.251.10.1'};
+  const button={disabled:true,dataset:{locked:'false'}};
+  const form={querySelector:selector=>selector.includes('configure')?button:selector.includes('address')?address:selector.includes('gateway')?gateway:null,
+    addEventListener:(name,fn)=>{input=fn;}};
+  const poll={dataset:{state:JSON.stringify({busy:false,job:{},leases:{}}),statusUrl:'/settings/network-setup/status'}};
+  const ctx={window:{},document:{addEventListener(){},querySelector:()=>poll,querySelectorAll:selector=>selector==='[data-setup-form]'?[form]:[]},
+    setInterval:fn=>{pollTick=fn;return 1;},clearInterval(){},fetch:async()=>{requests++;}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  ctx.window.TrafficGen.networkSetup();input();assert.equal(button.disabled,false);
+  await pollTick();assert.equal(requests,0);
+  gateway.value='';input();assert.equal(button.disabled,true);
+});

@@ -344,9 +344,8 @@ window.TrafficGen = (() => {
       const fingerprint=state=>JSON.stringify([state.busy,state.job?.id,state.job?.state,Object.entries(state.leases||{}).sort().map(([nic,lease])=>[nic,lease.state,lease.address,lease.gateway,lease.expires_at])]);
       const initial=fingerprint(JSON.parse(poll.dataset.state));
       let alive=true;cleanups.push(()=>alive=false);
-      const began=Date.now();
       repeat(async()=>{
-        if(!alive||dirty||Date.now()-began>90000)return;
+        if(!alive||dirty)return;
         try{
           const response=await fetch(poll.dataset.statusUrl,{cache:'no-store'});
           if(!response.ok)return;

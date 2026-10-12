@@ -92,3 +92,21 @@ def test_dhcp_ui_queues_one_idle_data_nic_and_does_not_accept_management(simulat
         assert b'Get address automatically (DHCP)' in response.data
         assert b'10.251.10.10/24' not in response.data
         assert b'WAN2 calibration' not in response.data
+
+
+def test_privileged_helpers_import_without_workload_venv_dependencies():
+    import subprocess
+    import sys
+    from pathlib import Path
+    code = """
+import importlib.abc,sys
+class BlockRequests(importlib.abc.MetaPathFinder):
+    def find_spec(self,fullname,*args):
+        if fullname=='requests' or fullname.startswith('requests.'):
+            raise ModuleNotFoundError('requests intentionally unavailable in root interpreter')
+sys.meta_path.insert(0,BlockRequests())
+sys.path.insert(0,sys.argv[1])
+from trafficgen import host_admin,data_dhcp,network_setup,traffic_paths
+assert 'requests' not in sys.modules
+"""
+    subprocess.run([sys.executable,'-I','-c',code,str(Path(__file__).resolve().parents[1])],check=True)

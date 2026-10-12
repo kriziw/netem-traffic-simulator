@@ -7,8 +7,6 @@ import json
 import re
 import time
 
-import requests
-from requests.adapters import HTTPAdapter
 
 from .maintenance import read_json
 from .network import validate_route, ip_json, interfaces
@@ -48,16 +46,8 @@ def metadata(route):
     return {key: route.get(key) for key in ("id", "name", "mode", "wan_id", "interface", "source", "gateway", "target", "policy_table")}
 
 
-class SourceAdapter(HTTPAdapter):
-    def __init__(self, source, **kwargs):
-        self.source = str(ipaddress.IPv4Address(source))
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
-        super().init_poolmanager(connections, maxsize, block, source_address=(self.source, 0), **kwargs)
-
-
 def bind_http(session, source):
+    from .source_http import SourceAdapter
     session.trust_env = False
     session.mount("http://", SourceAdapter(source))
     session.mount("https://", SourceAdapter(source))
