@@ -57,7 +57,7 @@ def status(settings, admin_dir=None):
 
 def enqueue(settings, action, payload=None, admin_dir=None):
     if action not in ('check_update', 'install_update', 'scan', 'route', 'clear_route', 'repair', 'configure_interface', 'forget_interface', 'configure_inventory', 'disconnect_inventory',
-                      'configure_target', 'disconnect_target', 'target_status', 'target_check', 'target_install', 'configure_path', 'select_path', 'remove_path', 'setup_path'):
+                      'configure_target', 'disconnect_target', 'target_status', 'target_check', 'target_install', 'configure_path', 'select_path', 'remove_path', 'setup_path', 'probe_setup'):
         raise ValueError('Unsupported administration action.')
     state = status(settings, admin_dir) if admin_dir else status(settings)
     if not state['ready']:

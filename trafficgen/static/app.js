@@ -326,6 +326,14 @@ window.TrafficGen = (() => {
         form.querySelector('[name="wiring_confirmed"]').checked=false;
       });
     });
+    document.querySelectorAll('[data-use-probe-role]').forEach(button=>button.addEventListener('click',()=>{
+      const role=button.dataset.useProbeRole;
+      const nic=document.getElementById(role+'-interface');
+      if(!nic||![...nic.options].some(option=>option.value===button.dataset.probeInterface))return;
+      nic.value=button.dataset.probeInterface;nic.dispatchEvent(new Event('change'));
+      document.getElementById(role+'-gateway').value=button.dataset.probeGateway;
+      document.getElementById(role).scrollIntoView({block:'start',behavior:'smooth'});
+    }));
   }
   return {networkSetup,liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
 })();

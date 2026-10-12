@@ -61,7 +61,10 @@ jobs:
           PY
 
       - name: Verify isolated Linux traffic policies
-        run: sudo "$(command -v python)" tests/kernel_paths_check.py
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y iputils-arping
+          sudo "$(command -v python)" tests/kernel_paths_check.py
 
       - uses: actions/setup-node@v4
         with:

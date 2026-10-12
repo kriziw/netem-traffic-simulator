@@ -116,7 +116,7 @@ test('network setup replaces the source when changing NIC and requires wiring re
   const nic={selectedOptions:[{dataset:{address:'10.252.10.10/24'}}],addEventListener:(name,fn)=>{change=fn;}};
   const address={value:'10.251.10.10/24'},confirmation={checked:true};
   const form={querySelector:selector=>selector.includes('interface')?nic:selector.includes('address')?address:confirmation};
-  const ctx={window:{},document:{addEventListener(){},querySelectorAll:()=>[form]}};
+  const ctx={window:{},document:{addEventListener(){},querySelectorAll:selector=>selector==='[data-setup-form]'?[form]:[]}};
   vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
   ctx.window.TrafficGen.networkSetup();change();
   assert.equal(address.value,'10.252.10.10/24');assert.equal(confirmation.checked,false);

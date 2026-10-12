@@ -106,6 +106,11 @@ def main():
                     # Exercise the guided task on a down, unaddressed guest NIC.
                     scoped(["ip", "-4", "address", "del", payload["source"] + "/24", "dev", payload["interface"]])
                     scoped(["ip", "link", "set", payload["interface"], "down"])
+                    # ARP evidence can be collected before any IP is assigned.
+                    scoped(["ip", "link", "set", payload["interface"], "up"])
+                    subprocess.run(["ip", "netns", "exec", simulator_ns, sys.executable, script, "arp", payload["interface"], payload["gateway"]], check=True)
+                    assert not next(nic for nic in network.interfaces() if nic["interface"] == payload["interface"])["addresses"]
+                    scoped(["ip", "link", "set", payload["interface"], "down"])
                     records.append(network_setup.configure({"path": payload, "address": payload["source"] + "/24"}, admin)["path"])
                 else:
                     records.append(traffic_paths.configure(payload, admin)["path"])
@@ -140,5 +145,10 @@ if __name__ == "__main__":
         server()
     elif len(sys.argv) > 1 and sys.argv[1] in ("client", "fail"):
         client(json.loads(sys.argv[2]), fail=sys.argv[1] == "fail")
+    elif len(sys.argv) > 1 and sys.argv[1] == "arp":
+        from trafficgen.setup_probe import arp
+        result = arp(sys.argv[2], sys.argv[3])
+        assert result["reachable"] is True and result["mac"], result
+        print("PASS: unaddressed data NIC received actual gateway ARP evidence")
     else:
         main()

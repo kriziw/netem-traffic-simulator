@@ -47,7 +47,20 @@ successful kernel/target checks alone cannot prove which external bridge was cro
 
 Open **Network setup** in the simulator. Attach data NICs in Proxmox, then refresh.
 The page detects guest interfaces and prefills single existing IPv4 addresses.
-Role suggestions use eth1-eth5; confirm the actual bridge attachment in Proxmox.
+Default role suggestions use eth1-eth5. **Probe detected interfaces** uses known
+appliance/ISP gateway hints to send a bounded ARP request on up to six data NICs,
+including unaddressed ones. Up to six gateway hints and two addressed vendor
+identity checks are allowed. Existing neighbor and LLDP evidence is included
+when available. Down links are enabled briefly and restored; the probe assigns
+no guest addresses or routes. Missing tools/permissions and absent replies yield
+Unknown, not a device-down verdict. Without a known gateway or neighbor evidence,
+it cannot infer an arbitrary subnet.
+
+Fresh gateway replies produce role candidates that can prefill the NIC and
+gateway in a setup card. ISP gateway reachability always remains ambiguous
+between a NetEm calibration interface and a clean baseline; confirm the bridge
+attachment in Proxmox. Recommendations expire after 15 minutes and never apply
+networking automatically.
 The editable template maps management to vmbr0, appliance LAN to vmbr3,
 WAN1/WAN2 calibration to vmbr1/vmbr2, and clean baselines to vmbr4/vmbr5.
 Bridge labels are wiring guidance, not discovery or Proxmox provisioning.

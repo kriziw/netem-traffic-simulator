@@ -44,9 +44,10 @@ from . import maintenance
 from . import remote_target
 from . import traffic_paths
 from . import network_setup
+from . import setup_probe
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
-from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness
+from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness, address_table
 
 
 def target_egress(host):
@@ -225,7 +226,7 @@ def create_app():
     def serialize_routing_requests():
         if request.method in ("POST", "PUT", "DELETE") and request.endpoint in (
                 "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
-                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action"):
+                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui", "network_setup_action", "network_setup_probe"):
             appliance_inventory_lock.acquire()
             g.appliance_inventory_lock = True
 
@@ -704,10 +705,31 @@ def create_app():
         except (ValueError, OSError) as exc:
             inventory, error = [], str(exc)
         paths = maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])
+        hints = maintenance.read_json(settings.runtime_dir / "setup-probe-hints.json", {})
+        for role, kind in (("appliance", "appliance"), ("wan1", "isp1"), ("wan2", "isp2")):
+            hints.setdefault(kind, saved.get(role, {}).get("gateway", ""))
+        if not hints.get("appliance") and saved_appliances():
+            hints["appliance"] = saved_appliances()[0].get("gateway", "")
         return render_template("network_setup.html", page="network_setup", system=state,
                                cards=network_setup.cards(saved, inventory, paths, management_interface()),
                                interfaces=inventory, management=management_interface(), network_error=error,
+                               probe_report=maintenance.read_json(maintenance.ADMIN_DIR / setup_probe.FILE, {}), probe_hints=hints, now=time.time(),
                                busy=state["busy"] or app.config["TRAFFICGEN_CONTROLLER"].status().get("status") in ("starting", "running", "stopping"))
+
+    @app.post("/settings/network-setup/probe")
+    @admin_required
+    def network_setup_probe():
+        try:
+            host_available(require_idle=True)
+            hints = {kind: request.form.get(kind + "_gateway", "").strip() for kind in setup_probe.HINTS}
+            payload = {"gateways": [{"kind": kind, "gateway": gateway} for kind, gateway in hints.items() if gateway]}
+            setup_probe.validate(payload, address_table(), management_interface())
+            maintenance.enqueue(settings, "probe_setup", payload)
+            _write_secret(settings.runtime_dir / "setup-probe-hints.json", json.dumps(hints))
+            flash("Interface probes queued. Refresh status when the task completes to see evidence and recommendations.", "info")
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("network_setup_ui") + "#interface-probes")
 
     @app.get("/settings/network-setup")
     @admin_required
