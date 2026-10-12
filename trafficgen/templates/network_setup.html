@@ -14,7 +14,7 @@
 </div></section>
 <div class="warning"><strong>Check the return path.</strong> Calibration and clean-baseline NICs on the same ISP subnet can create asymmetric replies or ARP ambiguity. Prefer a separate router subnet/VLAN for the baseline, or configure and verify interface-specific address handling and return routing before comparing results. Gateway and target checks alone do not prove physical traversal.</div>
 {% for card in cards %}
-<section class="card space-top setup-card" id="{{ card.role }}"><div class="card-head"><div><div class="card-title">{{ card.title }}</div><div class="card-sub">{{ card.connection }} · suggested NIC {{ card.suggested }}</div></div><span class="pill">{{ 'Address ready' if card.address_ready else ('NIC detected · needs setup' if card.nic else 'Attach NIC in Proxmox') }}</span></div><div class="card-body">
+<section class="card space-top setup-card" id="{{ card.role }}"><div class="card-head"><div><div class="card-title">{{ card.title }}</div><div class="card-sub">{{ card.connection }} · suggested NIC {{ card.suggested }}</div></div><span class="pill">{{ 'Address ready' if card.address_ready else ('NIC detected · needs setup' if card.nic else ('Choose detected NIC' if interfaces else 'Attach NIC in Proxmox')) }}</span></div><div class="card-body">
 <div class="setup-flow"><span>Simulator</span><span aria-hidden="true">→</span><strong>{{ 'SD-WAN appliance → NetEm' if card.mode == 'appliance' else ('NetEm ' ~ card.wan_id if card.mode == 'direct_netem' else 'Direct router') }}</strong><span aria-hidden="true">→</span><span>Controlled target</span></div>
 <form method="post" action="{{ url_for('network_setup_action') }}" data-setup-form data-native-submit="true">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="role" value="{{ card.role }}">
@@ -28,7 +28,7 @@
 {% if card.mode == 'direct_netem' %}<div><label for="{{ card.role }}-wan">NetEm WAN ID</label><input id="{{ card.role }}-wan" name="wan_id" value="{{ card.wan_id }}" required maxlength="64"><p class="setup-help">Match the WAN ID configured in NetEm.</p></div>{% endif %}
 </div>
 <label class="setup-confirm"><input type="checkbox" name="wiring_confirmed" value="1" required> I confirmed this NIC's bridge attachment in Proxmox and this simulator IP is unused.</label>
-<div class="actions"><button class="btn" name="action" value="save" {% if busy %}disabled{% endif %}>Save plan</button><button class="btn primary" name="action" value="configure" {% if busy or not system.ready or not card.nic %}disabled{% endif %}>Configure address &amp; verify path</button></div>
+<div class="actions"><button class="btn" name="action" value="save" {% if busy %}disabled{% endif %}>Save plan</button><button class="btn primary" name="action" value="configure" {% if busy or not system.ready or not interfaces %}disabled{% endif %}>Configure address &amp; verify path</button></div>
 <p class="setup-help">The app enables this guest NIC, saves its address for reboot, and verifies a source-bound route to the target. It does not select the workload path or change Proxmox. If verification fails, the saved address remains available for diagnosis.</p>
 </form>
 {% if card.path %}<div class="note">A saved path exists for this setup. Check its independent health in Traffic paths. {% if card.path.gateway != card.gateway %}Gateway settings have changed; configure and verify again.{% endif %}<a class="btn small" href="{{ url_for('traffic_paths_ui') }}">Select or inspect path</a></div>{% endif %}
