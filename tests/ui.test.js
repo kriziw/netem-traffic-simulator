@@ -74,6 +74,9 @@ test('diagnosis renders escaped findings, per-WAN rows and the application timin
   const apps=ui.appRowsHtml({updates:{experience_score:60,availability_pct:100,p95_ms:4400,p95_wait_ms:100,p95_transfer_ms:4300,median_down_mbps:11.2,requests:6,causes:{}},
     video:{experience_score:70,availability_pct:70,p95_ms:30,media:{loss_pct:0.4,bursts:10,bursts_with_loss:3,no_reply:0},top_cause:'media_loss',causes:{media_loss:3},requests:10}},diagnosis.cause_labels);
   assert.match(apps,/4\.3 s/);assert.match(apps,/↓ 11\.2 Mbit\/s/);assert.match(apps,/0\.40% · 3\/10 bursts/);assert.match(apps,/Media packet loss ×3/);
+  const quality=ui.appRowsHtml({erp:{critical:true,experience_score:0,availability_pct:100,requests:20,
+    score_components:{deadline:0,reliability:100},quality:{on_time_pct:20,udp_rtt_variation_p95_ms:12},scoring_complete:false}},{});
+  assert.match(quality,/critical/);assert.match(quality,/deadline/);assert.match(quality,/20.0%/);assert.match(quality,/incomplete evidence/);
 });
 
 test('target update controls reflect remote state and never enable installation during a workload',()=>{

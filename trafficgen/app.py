@@ -38,6 +38,7 @@ from .config import (
 )
 from .database import init_db, query_dem_timeseries, recent_runs
 from .dem import dem_summary
+from .experience_policy import load_policy, save_policy
 from .diagnosis import target_finding
 from .engine import WorkloadController
 from .profiles import profile_payload
@@ -486,7 +487,27 @@ def create_app():
             status=status,
             summary=with_target_finding(dem_summary(settings.database_path, run_id=run_id, window_seconds=60, media_mode=media_mode), status),
             runs=recent_runs(settings.database_path, 12),
+            experience_policy=load_policy(settings.database_path),
+            experience_applications=profile_payload()["applications"],
         )
+
+    @app.post("/experience/settings")
+    @admin_required
+    def experience_settings_ui():
+        try:
+            controller = app.config["TRAFFICGEN_CONTROLLER"]
+            with controller.lock:
+                if controller.status().get("status") in ("starting", "running", "stopping"):
+                    raise ValueError("Stop the workload before changing experience targets.")
+                policy = load_policy(settings.database_path)
+                raw = {name: {key: (request.form.get(name + "." + key) == "on" if key == "critical"
+                                   else request.form.get(name + "." + key))
+                              for key in fields} for name, fields in policy.items()}
+                save_policy(settings.database_path, raw)
+            flash("Experience targets saved. Future measurements use these targets.", "success")
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("dem_page"))
 
     @app.get("/ui/status")
     @admin_required
@@ -811,17 +832,21 @@ def create_app():
                 previous = next((card for card in existing if card["role"] == request.form.get("role")), None)
             row = network_setup.definition(request.form, previous, management_interface())
             action = request.form.get("action")
-            if action not in ("save", "configure"):
-                raise ValueError("Choose Save plan or Configure & verify.")
+            if action not in ("save", "configure", "save_interface"):
+                raise ValueError("Choose Save interface or Verify traffic path.")
             if any(other.get("source") == row["source"] for role, other in saved.items() if role != row["role"]):
                 raise ValueError("Each path needs its own simulator source address.")
-            if action == "configure":
+            if action in ("configure", "save_interface"):
                 validate_interface({"interface": row["interface"], "address": row["address"]}, management_interface())
-                maintenance.enqueue(settings, "setup_path", {"path": network_setup.payload(row), "address": row["address"]})
+                task = {"path": network_setup.payload(row), "address": row["address"]}
+                if action == "save_interface":
+                    task["verify"] = False
+                maintenance.enqueue(settings, "setup_path", task)
             saved[row["role"]] = row
             _write_secret(settings.runtime_dir / network_setup.FILE, json.dumps(saved))
             flash("Setup queued: enabling and saving the interface, then verifying the path. Refresh status for the result." if action == "configure"
-                  else "Plan saved. Configure & verify applies it inside the simulator.", "success")
+                  else "Interface save queued without verification. It will remain unverified until the traffic path check passes." if action == "save_interface"
+                  else "Plan saved. Verify traffic path applies it inside the simulator.", "warning" if action == "save_interface" else "success")
             return redirect(url_for("network_setup_ui", interface=row['interface'], role=row['role']))
         except (ValueError, OSError) as exc:
             flash(str(exc), "error")

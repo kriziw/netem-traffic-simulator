@@ -32,7 +32,9 @@ def cards(saved, inventory, paths, management="eth0"):
                 existing = matches[0]
                 row.update({key: existing[key] for key in ("id", "name", "interface", "gateway", "target", "address") if key in existing})
         row["nic"] = next((nic for nic in inventory if nic["interface"] == row["interface"]), None)
-        row["path"] = next((path for path in paths if path["id"] == row.get("id")), None)
+        row["path"] = next((path for path in paths if path["id"] == row.get("id")
+                            and all(path.get(key, "") == row.get(key, "")
+                                    for key in ("interface", "gateway", "target", "mode", "wan_id"))), None)
         row["address_ready"] = bool(row["nic"] and row["nic"].get("up") and row["address"] in row["nic"]["addresses"])
         result.append(row)
     return result
@@ -71,16 +73,23 @@ def payload(row):
 
 
 def configure(raw, admin):
-    if set(raw) != {"path", "address"} or not isinstance(raw["path"], dict):
+    if not {"path", "address"} <= set(raw) or set(raw) - {"path", "address", "verify"} or not isinstance(raw["path"], dict):
         raise ValueError("Invalid network setup task.")
+    if not isinstance(raw.get("verify", True), bool):
+        raise ValueError("Verify must be true or false.")
     path = raw["path"]
     address = validate_interface({"interface": path.get("interface"), "address": raw["address"]}, admin.management())
     # Validate the prospective route before any interface mutation.
     traffic_paths.validate(path, admin.management(), [{"interface": address["interface"], "addresses": [address["address"]], "up": True}])
     admin.configure_interface(address)
+    if not raw.get("verify", True):
+        warning = "Interface address saved without path verification. The appliance may be unlicensed or unavailable. Verify the path before selecting it for a workload. Previous workload selection retained."
+        return {"message": warning, "warning": warning, "verified": False}
     try:
         result = traffic_paths.configure(path, admin)
     except (ValueError, OSError) as exc:
-        raise ValueError("Interface address saved, but path verification failed. Previous workload selection retained. " + str(exc)) from exc
+        warning = "Interface address saved, but path verification failed. Previous workload selection retained. " + str(exc)
+        return {"message": warning, "warning": warning, "verified": False}
+    result["verified"] = True
     result["message"] = "Interface address saved and traffic path verified. Select it for the full workload when ready."
     return result

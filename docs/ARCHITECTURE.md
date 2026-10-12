@@ -51,10 +51,18 @@ Every Locust request carries context for run ID, persona and application.
 
 The simulator records success/failure, response time and response bytes to SQLite.
 
-Experience score combines:
-
-- synthetic transaction availability (65%)
-- application-aware P95 latency score (35%)
+Experience uses the lowest measured business-critical application score, including critical applications with
+only failed transactions. Each application uses the lowest of configured quality components, reliability and its
+application-specific P95 latency score. Reliability scores 100 at 99% success,
+55 at 95%, and 0 at 90% or below. Latency scores 100 at the good threshold,
+35 at the poor threshold, and 0 at twice the poor threshold. Intermediate values
+are interpolated linearly. The same calculation applies to endpoint/persona summaries
+and new saved samples. Historical scores are not recalculated.
+The policy is atomically stored in `experience-policy.json` beside the database.
+Targets cannot change during a workload. Deadline fulfillment is separate from
+transport success. UDP uses existing echoes; nullable `udp_jitter_ms` is added by
+an idempotent SQLite migration. Missing measurements are explicit. Transfer targets
+use completed workload payload, not capacity inference or additional probe traffic.
 
 The score is intentionally transparent and should be treated as a synthetic endpoint-experience indicator, not a vendor-specific commercial DEM score.
 

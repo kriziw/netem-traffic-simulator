@@ -62,6 +62,11 @@ edited path fields. There are no example addresses masquerading as live settings
 
 Confirm the Proxmox bridge and choose **Verify traffic path**, then select the
 verified path in **Traffic paths**. The app does not create Proxmox NICs or bridges.
+Use **Save interface without verification** to retain guest addressing even when
+an appliance is unlicensed or unavailable. A failed path check also retains the
+interface and returns a warning. Invalid addresses and interface-save failures
+remain errors. Saving an unverified setup neither selects nor publishes a verified
+workload path; existing selection remains unchanged. Retry verification when ready.
 For the current bridge template: vmbr3 is the appliance LAN, vmbr1 is WAN1 before
 NetEm, and vmbr4 is the clean ISP1 baseline. Management stays on vmbr0.
 
