@@ -155,7 +155,7 @@ def path_readiness(selected, management='eth0', inventory=None, target='198.18.0
                    if health['active'] else health['message'] + (' The simulator can restore it.' if repairable else ''))
         return {'ready': health['active'], 'repairable': repairable, 'saved_route': True, 'message': message,
                 'mode': selected.get('mode', 'appliance'), 'wan_id': selected.get('wan_id'),
-                'path': {key: selected.get(key) for key in ('interface', 'gateway', 'target', 'source', 'policy_table')}}
+                'path': {key: selected.get(key) for key in ('interface', 'gateway', 'target', 'source', 'policy_table') if key != 'policy_table' or selected.get(key)}}
     try:
         actual = ip_json('route', 'get', target)[0]
     except (OSError, ValueError, IndexError):
