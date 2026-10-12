@@ -140,9 +140,17 @@ def create_app():
     app = Flask(__name__)
     app.secret_key = ensure_session_secret(settings)
     app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True,
-                      SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=1024 * 1024)
+                      SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=12 * 1024 * 1024)
     app.config["TRAFFICGEN_SETTINGS"] = settings
     app.config["TRAFFICGEN_CONTROLLER"] = WorkloadController(settings)
+
+    from .branding import install as install_branding
+    install_branding(app, settings)
+
+    @app.before_request
+    def request_limit():
+        if request.path != "/api/v1/branding" and (request.content_length or 0) > 1024 * 1024:
+            return {"error": "Request too large."}, 413
 
     @app.before_request
     def protect_ui_forms():
