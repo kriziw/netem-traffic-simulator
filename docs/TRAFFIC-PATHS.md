@@ -43,44 +43,45 @@ Use the simulator's existing interface configuration tools after wiring the NICs
 Verify the physical path with WAN counters during the first calibration workload:
 successful kernel/target checks alone cannot prove which external bridge was crossed.
 
-## Guided network setup
+## Simple network setup and DHCP
 
-Open **Network setup** in the simulator. Attach data NICs in Proxmox, then refresh.
-The page detects guest interfaces and prefills single existing IPv4 addresses.
-Default role suggestions use eth1-eth5. **Probe detected interfaces** uses known
-appliance/ISP gateway hints to send a bounded ARP request on up to six data NICs,
-including unaddressed ones. Up to six gateway hints and two addressed vendor
-identity checks are allowed. Existing neighbor and LLDP evidence is included
-when available. Down links are enabled briefly and restored; the probe assigns
-no guest addresses or routes. Missing tools/permissions and absent replies yield
-Unknown, not a device-down verdict. Without a known gateway or neighbor evidence,
-it cannot infer an arbitrary subnet.
+Open **Network setup**, choose a detected data interface, and use **Get address
+automatically (DHCP)** if it has no address. Attaching a NIC to a Proxmox bridge
+does not start a DHCP client when guest addressing is Manual. The app now runs
+a per-interface BusyBox DHCP client with automatic lease renewal and boot startup.
+Its fixed root-owned hook applies only the address/prefix and records the router
+gateway. It ignores offered default routes and DNS, keeping management routing
+separate. Management interfaces and already-addressed/unmanaged NICs cannot be
+taken over. Existing Proxmox/ifupdown DHCP configuration is also refused.
 
-Fresh gateway replies produce role candidates that can prefill the NIC and
-gateway in a setup card. ISP gateway reachability always remains ambiguous
-between a NetEm calibration interface and a clean baseline; confirm the bridge
-attachment in Proxmox. Recommendations expire after 15 minutes and never apply
-networking automatically.
-The editable template maps management to vmbr0, appliance LAN to vmbr3,
-WAN1/WAN2 calibration to vmbr1/vmbr2, and clean baselines to vmbr4/vmbr5.
-Bridge labels are wiring guidance, not discovery or Proxmox provisioning.
+Choose one traffic purpose: through the appliance, through NetEm WAN1, or direct
+to the router. DHCP-provided address and gateway fill the selected path. Other
+WAN choices, manual addresses, target/WAN overrides and gateway probes are under
+Advanced. The page watches task/lease changes and refreshes without interrupting
+edited path fields. There are no example addresses masquerading as live settings.
 
-Enter a unique simulator IPv4/prefix, gateway, controlled target data IP and
-NetEm WAN ID for calibration. **Save plan** persists a draft without networking
-changes. **Configure address & verify path** queues guest interface validation,
-address enablement/persistence and source-bound path verification as one task.
-It does not select the workload path or add a default gateway. After success,
-open **Traffic paths** and select **Use for full workload**.
+Confirm the Proxmox bridge and choose **Verify traffic path**, then select the
+verified path in **Traffic paths**. The app does not create Proxmox NICs or bridges.
+For the current bridge template: vmbr3 is the appliance LAN, vmbr1 is WAN1 before
+NetEm, and vmbr4 is the clean ISP1 baseline. Management stays on vmbr0.
 
-If target verification fails, the address remains saved for diagnosis; the
-previous workload selection is retained. Configuration is blocked during runs
-or administration tasks. Conflicting existing addresses must be changed in
-Proxmox. Changed source/interface/target definitions create a new policy;
-remove unused older policies from Traffic paths.
+No DHCP reply means the client continues trying; check bridge attachment, DHCP
+service, NetEm forwarding and UDP 67/68 filtering. DHCP requires an attached NIC
+and a reachable server; the app cannot infer a router's network without a reply.
+Manual configuration remains available for networks without DHCP. Stop app DHCP
+before changing to a manual address; paths using it must first be removed.
 
-Calibration and baseline NICs sharing an ISP subnet need explicit ARP/address
-handling and symmetric return routing. Prefer a separate baseline router
-subnet/VLAN. Confirm physical traversal with WAN counters before scaling up.
+DHCP lease loss/expiry or a changed source prevents verification/start of the old
+source-bound path. Stale DHCP addresses are not restored as static addresses at
+boot. Same-source lease recovery restores saved policies; a changed lease source
+requires explicit re-verification/selection. No automatic workload failover is
+introduced. Router reservations are useful for repeatable tests.
+
+Advanced probes gather bounded interface-local ARP evidence, including before an
+IP is assigned, and available neighbor/vendor evidence. Shared ISP gateways leave
+NetEm-versus-baseline recommendations ambiguous; confirm Proxmox wiring and WAN
+counters. Calibration/baseline NICs sharing a subnet need symmetric return routing
+and appropriate ARP handling; a separate baseline subnet/VLAN avoids that ambiguity.
 
 ## Configuration and selection
 

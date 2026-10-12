@@ -63,7 +63,7 @@ jobs:
       - name: Verify isolated Linux traffic policies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y iputils-arping
+          sudo apt-get install -y iputils-arping busybox dnsmasq-base
           sudo "$(command -v python)" tests/kernel_paths_check.py
 
       - uses: actions/setup-node@v4
@@ -78,6 +78,7 @@ jobs:
       - name: Shell validation
         run: |
           bash -n scripts/install-lxc.sh
+          bash -n scripts/data-dhcp-hook.sh
           bash -n scripts/install-target.sh
           bash -n scripts/configure-lxc-service.sh
 

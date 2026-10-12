@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import shlex
 import tempfile
 import threading
 import time
@@ -71,6 +72,7 @@ def main():
     host_routes = original_run(["ip", "-j", "-4", "route", "show", "table", "main"])
     created = []
     process = None
+    dhcp_process = None
     try:
         for namespace in (simulator_ns, router_ns):
             original_run(["ip", "netns", "add", namespace]); created.append(namespace)
@@ -111,6 +113,20 @@ def main():
                     subprocess.run(["ip", "netns", "exec", simulator_ns, sys.executable, script, "arp", payload["interface"], payload["gateway"]], check=True)
                     assert not next(nic for nic in network.interfaces() if nic["interface"] == payload["interface"])["addresses"]
                     scoped(["ip", "link", "set", payload["interface"], "down"])
+                    # Real DHCP exchange; the hook ignores offered DNS/default routes.
+                    dhcp_process = subprocess.Popen(["ip", "netns", "exec", router_ns, "dnsmasq", "--no-daemon", "--conf-file=/dev/null", "--port=0",
+                        "--bind-interfaces", "--interface=vr" + marker + "1", "--dhcp-range=10.251.10.10,10.251.10.10,255.255.255.0,2m",
+                        "--dhcp-option=3,10.251.10.1", "--dhcp-option=6,192.0.2.53", "--dhcp-leasefile="+temporary+"/dnsmasq.leases"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    hook = Path(temporary) / "dhcp-hook.sh"
+                    hook.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(script) + " dhcp-hook " + shlex.quote(temporary) + ' "$1"\n')
+                    hook.chmod(0o755)
+                    (Path(temporary) / "dhcp-interfaces.json").write_text(json.dumps({"eth1":True}))
+                    scoped(["ip", "link", "set", payload["interface"], "up"])
+                    subprocess.run(["ip","netns","exec",simulator_ns,"busybox","udhcpc","-f","-n","-q","-i","eth1","-s",str(hook),"-t","4","-T","2"],check=True,timeout=15)
+                    lease = json.loads((Path(temporary) / "dhcp-eth1.json").read_text())
+                    assert lease["state"] == "bound" and lease["gateway"] == "10.251.10.1"
+                    assert not scoped(["ip","-4","route","show","default"]).strip(), "DHCP installed a default route"
                     records.append(network_setup.configure({"path": payload, "address": payload["source"] + "/24"}, admin)["path"])
                 else:
                     records.append(traffic_paths.configure(payload, admin)["path"])
@@ -130,6 +146,12 @@ def main():
         assert original_run(["ip", "-j", "-4", "route", "show", "table", "main"]) == host_routes
         print("PASS: three independent HTTP/UDP paths, selection, fail-closed policy and reboot restoration; host routes unchanged")
     finally:
+        if dhcp_process:
+            dhcp_process.terminate()
+            try:
+                dhcp_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                dhcp_process.kill(); dhcp_process.wait()
         if process:
             process.terminate()
             try:
@@ -150,5 +172,9 @@ if __name__ == "__main__":
         result = arp(sys.argv[2], sys.argv[3])
         assert result["reachable"] is True and result["mac"], result
         print("PASS: unaddressed data NIC received actual gateway ARP evidence")
+    elif len(sys.argv) > 1 and sys.argv[1] == "dhcp-hook":
+        from trafficgen import host_admin, data_dhcp
+        host_admin.ADMIN_DIR = Path(sys.argv[2])
+        data_dhcp.event(host_admin,sys.argv[3],os.environ)
     else:
         main()

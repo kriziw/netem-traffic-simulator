@@ -318,22 +318,42 @@ window.TrafficGen = (() => {
     }poll();repeat(poll,2000);
   }
   function networkSetup(){
+    let dirty=false;
     document.querySelectorAll('[data-setup-form]').forEach(form=>{
       const nic=form.querySelector('[data-setup-interface]');
-      const address=form.querySelector('[data-setup-address]');
-      nic.addEventListener('change',()=>{
+      const address=form.querySelector('[data-setup-address]')||form.querySelector('[name="address"]');
+      if(nic)nic.addEventListener('change',()=>{
         address.value=nic.selectedOptions[0]?.dataset.address||'';
         form.querySelector('[name="wiring_confirmed"]').checked=false;
       });
+      const configure=form.querySelector('[data-setup-configure]');
+      if(configure)form.addEventListener('input',()=>{
+        dirty=true;
+        configure.disabled=configure.dataset.locked==='true'||!form.querySelector('[name="address"]').value||!form.querySelector('[name="gateway"]').value;
+      });
     });
+    const poll=document.querySelector?.('[data-setup-poll]');
     document.querySelectorAll('[data-use-probe-role]').forEach(button=>button.addEventListener('click',()=>{
-      const role=button.dataset.useProbeRole;
-      const nic=document.getElementById(role+'-interface');
-      if(!nic||![...nic.options].some(option=>option.value===button.dataset.probeInterface))return;
-      nic.value=button.dataset.probeInterface;nic.dispatchEvent(new Event('change'));
-      document.getElementById(role+'-gateway').value=button.dataset.probeGateway;
-      document.getElementById(role).scrollIntoView({block:'start',behavior:'smooth'});
+      const url=new URL(location.href);
+      url.search='';url.hash='';
+      url.searchParams.set('interface',button.dataset.probeInterface);
+      url.searchParams.set('role',button.dataset.useProbeRole);
+      location.assign(url.href);
     }));
+    if(poll){
+      const fingerprint=state=>JSON.stringify([state.busy,state.job?.id,state.job?.state,Object.entries(state.leases||{}).sort().map(([nic,lease])=>[nic,lease.state,lease.address,lease.gateway,lease.expires_at])]);
+      const initial=fingerprint(JSON.parse(poll.dataset.state));
+      let alive=true;cleanups.push(()=>alive=false);
+      repeat(async()=>{
+        if(!alive||dirty)return;
+        try{
+          const response=await fetch(poll.dataset.statusUrl,{cache:'no-store'});
+          if(!response.ok)return;
+          const state=await response.json();
+          if(alive&&!dirty&&fingerprint(state)!==initial)await refreshPage();
+        }catch(_){}
+      },2000);
+    }
   }
   return {networkSetup,liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
 })();

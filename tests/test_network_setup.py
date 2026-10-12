@@ -63,8 +63,9 @@ def test_setup_authentication_save_apply_idle_guard_and_errors(simulator, tmp_pa
         assert saved["wan1"]["bridge"] == "vmbr1"
         response = client.get("/settings/network-setup")
         assert response.status_code == 200
-        assert b"Configure address &amp; verify path" in response.data
-        assert b"not detected Proxmox attachments" in response.data
+        assert b"Choose an interface" in response.data
+        assert b"Choose where traffic goes" in response.data
+        assert b"Configure address &amp; verify path" not in response.data
         assert client.post("/settings/network-setup", data=dict(RAW, action="configure")).status_code == 302
         assert enqueue.call_args.args[1] == "setup_path"
         assert enqueue.call_args.args[2]["path"]["id"] == saved["wan1"]["id"]

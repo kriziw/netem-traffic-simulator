@@ -7,8 +7,6 @@ import json
 import re
 import time
 
-import requests
-from requests.adapters import HTTPAdapter
 
 from .maintenance import read_json
 from .network import validate_route, ip_json, interfaces
@@ -48,16 +46,8 @@ def metadata(route):
     return {key: route.get(key) for key in ("id", "name", "mode", "wan_id", "interface", "source", "gateway", "target", "policy_table")}
 
 
-class SourceAdapter(HTTPAdapter):
-    def __init__(self, source, **kwargs):
-        self.source = str(ipaddress.IPv4Address(source))
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
-        super().init_poolmanager(connections, maxsize, block, source_address=(self.source, 0), **kwargs)
-
-
 def bind_http(session, source):
+    from .source_http import SourceAdapter
     session.trust_env = False
     session.mount("http://", SourceAdapter(source))
     session.mount("https://", SourceAdapter(source))
@@ -66,6 +56,11 @@ def bind_http(session, source):
 
 def policy_status(route, inventory=None, management="eth0"):
     try:
+        from . import data_dhcp, maintenance
+        if data_dhcp.enabled(maintenance, route['interface']):
+            current = data_dhcp.lease(maintenance, route['interface'])
+            if current.get('state') != 'bound' or current.get('source') != route['source']:
+                return {"active":False,"state":"error","message":"DHCP lease expired or changed; verify this path with its current address."}
         validate_route(route, management, inventory)
         actual = ip_json("route", "get", route["target"], "from", route["source"])[0]
         active = (actual.get("dev") == route["interface"] and actual.get("gateway") == route["gateway"]
@@ -210,6 +205,12 @@ def select(path_id, admin, verify=True):
 
 def restore(admin):
     for path in read_json(admin.ADMIN_DIR / FILE, []):
+        from . import data_dhcp
+        if data_dhcp.enabled(admin, path['interface']):
+            current = data_dhcp.lease(admin, path['interface'])
+            nic = next((nic for nic in admin.interfaces(admin.management()) if nic['interface'] == path['interface']), {})
+            if current.get('state') != 'bound' or path['address'] not in nic.get('addresses', []):
+                continue
         admin.configure_interface({"interface": path["interface"], "address": path["address"]}, persist=False)
         payload = {key: path[key] for key in ("id", "name", "mode", "wan_id", "interface", "gateway", "target", "source")}
         configure(payload, admin, verify=False)
