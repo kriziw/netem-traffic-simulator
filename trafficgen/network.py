@@ -63,6 +63,11 @@ def validate_route(payload, management='eth0', inventory=None):
                 and (a.network.prefixlen >= 31 or gateway not in (a.network.network_address, a.network.broadcast_address))]
     if not matching or any(target in a.network for a in addresses):
         raise ValueError('Gateway must be on the selected LAN and target must be upstream, outside that LAN.')
+    requested_source = payload.get('source')
+    if requested_source:
+        matching = [address for address in matching if str(address.ip) == str(requested_source)]
+        if not matching:
+            raise ValueError('Source address must belong to the selected data interface and gateway subnet.')
     # The address with its prefix lets a repair restore the NIC if it later comes up without it.
     return {'interface': interface, 'gateway': str(gateway), 'target': str(target), 'source': str(matching[0].ip),
             'address': str(matching[0])}
@@ -111,6 +116,9 @@ def discover(management='eth0', scan=False):
 def route_status(selected, management='eth0', inventory=None):
     if not selected:
         return {'state': 'unselected', 'active': False, 'message': 'No managed route selected.'}
+    if selected.get('policy_table'):
+        from .traffic_paths import policy_status
+        return policy_status(selected, inventory, management)
     try:
         rows = inventory if inventory is not None else interfaces(management)
         row = next((r for r in rows if r['interface'] == selected['interface']), None)
@@ -142,10 +150,12 @@ def path_readiness(selected, management='eth0', inventory=None, target='198.18.0
         row = next((r for r in rows if r['interface'] == selected['interface']), None)
         address = selected.get('address') or ((saved_interfaces or {}).get(selected['interface']) or {}).get('address')
         repairable = not health['active'] and row is not None and bool(row['addresses'] or address)
-        message = (f"Traffic to {selected['target']} goes through the appliance at {selected['gateway']} on {selected['interface']}."
+        label = {'direct_netem': 'router through NetEm', 'direct_baseline': 'router baseline'}.get(selected.get('mode'), 'appliance')
+        message = (f"Traffic to {selected['target']} goes through the {label} at {selected['gateway']} on {selected['interface']}."
                    if health['active'] else health['message'] + (' The simulator can restore it.' if repairable else ''))
         return {'ready': health['active'], 'repairable': repairable, 'saved_route': True, 'message': message,
-                'path': {key: selected.get(key) for key in ('interface', 'gateway', 'target', 'source')}}
+                'mode': selected.get('mode', 'appliance'), 'wan_id': selected.get('wan_id'),
+                'path': {key: selected.get(key) for key in ('interface', 'gateway', 'target', 'source', 'policy_table') if key != 'policy_table' or selected.get(key)}}
     try:
         actual = ip_json('route', 'get', target)[0]
     except (OSError, ValueError, IndexError):

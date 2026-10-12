@@ -119,6 +119,8 @@ def init_db(path: Path):
             conn.execute("ALTER TABLE runs ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'strict'")
         if "label" not in run_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN label TEXT")
+        if "traffic_path_json" not in run_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN traffic_path_json TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_transactions_endpoint "
             "ON transactions(endpoint_id, timestamp)"
@@ -131,8 +133,8 @@ def create_run(path: Path, run: dict):
             """
             INSERT INTO runs (
                 run_id, started_at, ended_at, status, profile, target,
-                target_users, spawn_rate, activity, personas_json, applications_json, media_mode, label
-            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_users, spawn_rate, activity, personas_json, applications_json, media_mode, label, traffic_path_json
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run["run_id"],
@@ -147,6 +149,7 @@ def create_run(path: Path, run: dict):
                 json.dumps(run["applications"], sort_keys=True),
                 run.get("media_mode", "strict"),
                 run.get("label"),
+                json.dumps(run["traffic_path"], sort_keys=True) if run.get("traffic_path") else None,
             ),
         )
 
@@ -255,6 +258,7 @@ def recent_runs(path: Path, limit: int = 20):
         item = dict(row)
         item["personas"] = json.loads(item.pop("personas_json"))
         item["applications"] = json.loads(item.pop("applications_json"))
+        item["traffic_path"] = json.loads(item.pop("traffic_path_json") or "null")
         result.append(item)
     return result
 

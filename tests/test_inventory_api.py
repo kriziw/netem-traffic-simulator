@@ -56,7 +56,7 @@ def test_registered_appliance_can_be_selected_through_existing_verified_queue(si
     with patch.object(maintenance, "enqueue", return_value={"id": "job", "action": "route"}) as enqueue:
         response = client.post("/api/v1/network/select", headers=headers, json={"appliance_id": APPLIANCE_ID})
     assert response.status_code == 202
-    assert enqueue.call_args.args[1] == "route"
+    assert enqueue.call_args.args[1] == "configure_path"
     assert enqueue.call_args.args[2]["gateway"] == RECORD["gateway"]
 
 

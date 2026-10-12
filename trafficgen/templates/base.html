@@ -21,6 +21,7 @@
       <div class="nav-group">Operate</div>
       <a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Command Center</a>
       <a class="nav-link {% if page == 'workloads' %}active{% endif %}" href="{{ url_for('workloads') }}">Workloads</a>
+      <a class="nav-link {% if page == 'paths' %}active{% endif %}" href="{{ url_for('traffic_paths_ui') }}">Traffic paths</a>
       <a class="nav-link {% if page == 'dem' %}active{% endif %}" href="{{ url_for('dem_page') }}">Digital Experience</a>
 
       <div class="nav-group">System</div>

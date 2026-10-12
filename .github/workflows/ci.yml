@@ -35,6 +35,7 @@ jobs:
         run: python -m gevent.monkey --module pytest -q
 
       - name: Template validation
+        # Run actual kernel routing only inside disposable namespaces.
         env:
           TRAFFICGEN_CONFIG_DIR: ${{ runner.temp }}/trafficgen-config
           TRAFFICGEN_RUNTIME_DIR: ${{ runner.temp }}/trafficgen-runtime
@@ -50,12 +51,16 @@ jobs:
               "dem.html",
               "api.html",
               "system.html",
+              "traffic_paths.html",
           ]
           for template in templates:
               app.jinja_env.get_template(template)
               print("PASS", template)
           app.config["TRAFFICGEN_CONTROLLER"].shutdown()
           PY
+
+      - name: Verify isolated Linux traffic policies
+        run: sudo "$(command -v python)" tests/kernel_paths_check.py
 
       - uses: actions/setup-node@v4
         with:

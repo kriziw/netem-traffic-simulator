@@ -42,6 +42,7 @@ from .engine import WorkloadController
 from .profiles import profile_payload
 from . import maintenance
 from . import remote_target
+from . import traffic_paths
 from .appliance_identity import enrich_candidates
 from .proxmox_inventory import validate_config
 from .network import discover, validate_route, ip_json, VENDORS, route_status, validate_interface, interfaces, path_readiness
@@ -109,6 +110,8 @@ def path_watchdog(application, stop_event, first=15, interval=30, backoff=120, l
         delay = interval
         try:
             readiness = application.config["TRAFFICGEN_NETWORK_READINESS"](check_target=False)
+            if application.config.get("TRAFFICGEN_PATH_HEALTH"):
+                application.config["TRAFFICGEN_PATH_HEALTH"]()
             due = last is None or time.monotonic() - last >= backoff
             if (not readiness["ready"] and readiness["repairable"] and readiness.get("saved_route")
                     and not readiness.get("busy") and due):
@@ -186,7 +189,7 @@ def create_app():
                                  "Appliance Routing, or repair the traffic path.")
         if selected:
             try:
-                actual = ip_json("route", "get", selected["target"])[0]
+                actual = ip_json("route", "get", selected["target"], *(["from", selected["source"]] if selected.get("policy_table") else []))[0]
             except (OSError, ValueError, IndexError) as exc:
                 raise ValueError("Cannot verify the selected appliance route. Verify & select it again.") from exc
             if actual.get("dev") != selected["interface"] or actual.get("gateway") != selected["gateway"] or 'linkdown' in actual.get('flags', []):
@@ -195,6 +198,15 @@ def create_app():
             if urlsplit(str(payload.get("target", ""))).hostname != selected["target"]:
                 raise ValueError("Workload target must match the selected appliance's benchmark route.")
         return payload
+
+    def start_workload(payload):
+        payload = routed_payload(payload)
+        selected = maintenance.status(settings).get("selected") or {}
+        if selected.get("policy_table"):
+            if not traffic_paths.policy_status(selected, management=management_interface())["active"]:
+                raise ValueError("Selected path policy is inactive; workload fallback is refused.")
+            return app.config["TRAFFICGEN_CONTROLLER"].start(payload, traffic_path=traffic_paths.metadata(selected))
+        return app.config["TRAFFICGEN_CONTROLLER"].start(payload)
 
     def with_target_finding(summary, status):
         finding = target_finding((status.get("run") or {}).get("target_info"), __version__)
@@ -210,9 +222,9 @@ def create_app():
 
     @app.before_request
     def serialize_routing_requests():
-        if request.method in ("POST", "PUT") and request.endpoint in (
+        if request.method in ("POST", "PUT", "DELETE") and request.endpoint in (
                 "api_network_appliance_save", "api_network_select", "system_action", "api_network_repair",
-                "api_workload_start", "workload_start_ui"):
+                "api_workload_start", "workload_start_ui", "api_path_configure", "api_path_select", "api_path_remove", "path_action_ui"):
             appliance_inventory_lock.acquire()
             g.appliance_inventory_lock = True
 
@@ -231,7 +243,11 @@ def create_app():
                                 state.get("interface_configs"), saved_appliances())
         result.update(busy=state["busy"], job=state.get("job") or {}, checked_at=time.time())
         if check_target and result["ready"]:
-            ok, message = target_health(result["path"]["target"])
+            if state.get("selected", {}) and state["selected"].get("policy_table"):
+                observation = traffic_paths.probe(state["selected"], management)
+                ok, message = observation["reachable"] is True, observation["message"]
+            else:
+                ok, message = target_health(result["path"]["target"])
             result["target"] = {"ok": ok, "message": message}
             if not ok:
                 result.update(ready=False, message=message + " The route is in place: check the appliance policy and its WAN links.")
@@ -247,6 +263,27 @@ def create_app():
 
     app.config["TRAFFICGEN_NETWORK_READINESS"] = network_readiness
     app.config["TRAFFICGEN_REPAIR"] = enqueue_repair
+
+    path_health_cache = {"checked_at": None, "paths": []}
+    path_health_lock = threading.Lock()
+    path_health_clock = None
+
+    def path_health():
+        nonlocal path_health_clock
+        # Only one collector; callers can read last known data while it runs.
+        if not path_health_lock.acquire(blocking=False):
+            return dict(path_health_cache)
+        try:
+            if path_health_clock is None or time.monotonic() - path_health_clock >= 30:
+                paths = maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])
+                observations = [traffic_paths.probe(path, management_interface()) for path in paths]
+                path_health_cache.update(checked_at=time.time(), paths=observations)
+                path_health_clock = time.monotonic()
+            return dict(path_health_cache)
+        finally:
+            path_health_lock.release()
+
+    app.config["TRAFFICGEN_PATH_HEALTH"] = path_health
 
     def system_snapshot():
         state = maintenance.status(settings)
@@ -403,7 +440,7 @@ def create_app():
             "media_mode": request.form.get("media_mode") or "strict",
         }
         try:
-            app.config["TRAFFICGEN_CONTROLLER"].start(routed_payload(payload))
+            start_workload(payload)
             flash("Corporate workload started.", "success")
         except (ValueError, RuntimeError) as exc:
             flash(str(exc), "error")
@@ -590,9 +627,93 @@ def create_app():
             selected = next((row for row in saved_appliances() if row["id"] == data.get("appliance_id")), None)
             if selected is None:
                 raise ValueError("Choose a saved appliance_id.")
-            return jsonify(maintenance.enqueue(settings, "route", selected)), 202
+            # New selection gets a source-bound policy as well as the existing
+            # route projection, so probes on other interfaces remain independent.
+            policy = {key: selected[key] for key in ("id", "name", "interface", "gateway", "target")}
+            if selected.get("source"):
+                policy["source"] = selected["source"]
+            policy.update(mode="appliance", select=True)
+            return jsonify(maintenance.enqueue(settings, "configure_path", policy)), 202
         except (ValueError, OSError) as exc:
             return {"error": str(exc)}, 409
+
+    @app.get("/api/v1/network/paths")
+    @bearer_required
+    def api_paths():
+        return jsonify({"paths": maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []),
+                        "selected": maintenance.status(settings).get("selected")})
+
+    @app.get("/api/v1/network/paths/health")
+    @bearer_required
+    def api_path_health():
+        return jsonify(path_health())
+
+    @app.put("/api/v1/network/paths/<path_id>")
+    @bearer_required
+    def api_path_configure(path_id):
+        try:
+            host_available(require_idle=True)
+            raw = request.get_json(silent=True)
+            if not isinstance(raw, dict) or "id" in raw or "select" in raw:
+                raise ValueError("Provide a traffic path definition; workload selection is a separate action.")
+            traffic_paths.validate(dict(raw, id=path_id), management_interface())
+            return jsonify(maintenance.enqueue(settings, "configure_path", dict(raw, id=path_id))), 202
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
+    @app.post("/api/v1/network/paths/select")
+    @bearer_required
+    def api_path_select():
+        try:
+            host_available(require_idle=True)
+            raw = request.get_json(silent=True)
+            if not isinstance(raw, dict) or set(raw) != {"id"}:
+                raise ValueError("Choose a configured path ID.")
+            if not any(path["id"] == raw["id"] for path in maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])):
+                raise ValueError("Choose a configured traffic path.")
+            return jsonify(maintenance.enqueue(settings, "select_path", {"id": raw["id"]})), 202
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
+    @app.delete("/api/v1/network/paths/<path_id>")
+    @bearer_required
+    def api_path_remove(path_id):
+        try:
+            host_available(require_idle=True)
+            if not re.fullmatch(r"[a-f0-9]{16,32}", path_id):
+                raise ValueError("Invalid path ID.")
+            return jsonify(maintenance.enqueue(settings, "remove_path", {"id": path_id})), 202
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}, 409
+
+    @app.get("/traffic-paths")
+    @admin_required
+    def traffic_paths_ui():
+        return render_template("traffic_paths.html", page="paths", paths=maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []),
+                               selected=maintenance.status(settings).get("selected") or {}, health=dict(path_health_cache), now=time.time(),
+                               job=maintenance.status(settings).get("job") or {}, new_id=secrets.token_hex(16))
+
+    @app.post("/traffic-paths/action")
+    @admin_required
+    def path_action_ui():
+        try:
+            host_available(require_idle=True)
+            action = request.form.get("action")
+            if action == "configure":
+                payload = {key: request.form.get(key, "") for key in ("id", "name", "mode", "wan_id", "interface", "source", "gateway", "target")}
+                traffic_paths.validate(payload, management_interface())
+                maintenance.enqueue(settings, "configure_path", payload)
+            elif action in ("select", "remove"):
+                path_id = request.form.get("id", "")
+                if not any(path["id"] == path_id for path in maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])):
+                    raise ValueError("Choose a configured traffic path.")
+                maintenance.enqueue(settings, action + "_path", {"id": path_id})
+            else:
+                raise ValueError("Unknown path action.")
+            flash("Traffic path task queued. Refresh to inspect verification results.", "success")
+        except (ValueError, OSError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("traffic_paths_ui"))
 
     # ----- Versioned integration API -----
 
@@ -639,9 +760,7 @@ def create_app():
     @bearer_required
     def api_workload_start():
         try:
-            status = app.config["TRAFFICGEN_CONTROLLER"].start(
-                routed_payload(workload_payload())
-            )
+            status = start_workload(workload_payload())
             return jsonify(status), 201
         except ValueError as exc:
             return {"error": str(exc)}, 400

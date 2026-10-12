@@ -14,6 +14,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import sys
 from urllib.request import Request, urlopen
 
 from .maintenance import ADMIN_DIR, read_json, version_tuple
@@ -175,6 +176,9 @@ def route_command(action, route):
 
 
 def apply_route(payload, verify=True):
+    if payload.get('policy_table'):
+        from .traffic_paths import select
+        return select(payload['id'], sys.modules[__name__], verify=verify)
     route = validate_route(payload, management())
     target = route['target']
     existing = exact_routes(target)
@@ -208,6 +212,9 @@ def apply_route(payload, verify=True):
 
 def clear_route():
     selected = read_json(ADMIN_DIR / 'route.json')
+    if selected and selected.get('policy_table'):
+        (ADMIN_DIR / 'route.json').unlink(missing_ok=True)
+        return {'message': 'Workload path deselected. Independent path policies remain available for health probes.'}
     if selected:
         route = selected
         if any(managed(r) for r in exact_routes(route['target'])):
@@ -221,7 +228,7 @@ def configure_interface(payload, persist=True):
     config = validate_interface(payload, management())
     name = config['interface']
     saved = read_json(ADMIN_DIR / 'interfaces.json', {})
-    if name in saved and saved[name] != config:
+    if persist and name in saved and saved[name] != config:
         raise ValueError('Stop restoring the old saved interface configuration before changing it.')
     link = next(r for r in address_table() if r.get('ifname', '').split('@')[0] == name)
     was_up = 'UP' in link.get('flags', [])
@@ -277,6 +284,8 @@ def restore_path(route, verify):
 
 
 def restore_network():
+    from .traffic_paths import restore
+    restore(sys.modules[__name__])
     failures = restore_path(read_json(ADMIN_DIR / 'route.json'), verify=False)
     if failures:
         raise ValueError('; '.join(failures))
@@ -376,6 +385,13 @@ def process_request():
             result = appliance_scan()
         elif job['action'] == 'route':
             result = apply_route(payload)
+        elif job['action'] in ('configure_path', 'select_path'):
+            from .traffic_paths import configure, select
+            result = (configure(payload, sys.modules[__name__]) if job['action'] == 'configure_path'
+                      else select(str(payload.get('id', '')), sys.modules[__name__]))
+        elif job['action'] == 'remove_path':
+            from .traffic_paths import remove
+            result = remove(str(payload.get('id', '')), sys.modules[__name__])
         elif job['action'] == 'configure_inventory':
             result = inventory_configure(payload)
         elif job['action'] == 'disconnect_inventory':
