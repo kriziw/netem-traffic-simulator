@@ -3,13 +3,11 @@
 ## Controller and executor contract
 
 The local UI is read-only; authenticated REST commands remain available to NetEm.
-`POST /api/v1/controller/view` takes a fixed screen `path`, `method` (`GET`/`POST`),
-text-valued `fields`/`query`, and the controller's `csrf_token`. It returns screen
-body/content type/status, constrained local navigation and flash messages. It reuses
-existing operator validation, routing locks and administration queues. Arbitrary
-URLs, API paths and static files are refused. The response to successful API-key
-rotation includes the replacement credential so NetEm can securely update its
-integration; the controller must never log this response.
+`GET /api/v1/controller/settings` returns JSON agent state: system task/release/target status, data interfaces, guided network cards (including unverified drafts), verified paths, DHCP state, probe results and experience policy/application metadata.
+
+`POST /api/v1/controller/commands/<command>` accepts JSON commands: `network-setup`, `experience`, `system`, `dhcp`, `probe`, `rotate-key`. Configuration uses the existing validated execution helpers and serialized administration queue. Network setup accepts the same role/interface/address/gateway/target/bridge/wiring confirmation fields; `save_interface` preserves unverified addressing, `configure` verifies and `save` stores a plan. Experience receives a policy object, DHCP receives interface/start-or-stop, and probe receives gateway observations. Other commands use text fields. Commands return JSON messages and data, never HTML or navigation. Rotation returns a replacement key that NetEm saves securely and never logs.
+
+The old HTML `/api/v1/controller/view` API has been removed. Native NetEm controls own rendering, navigation, form validation feedback and test ownership.
 
 Workload start optionally accepts integer `controller_lease_seconds` (15–120).
 `POST /api/v1/controller/heartbeat` accepts `run_id` and optional `phase` (≤120
@@ -17,9 +15,8 @@ characters), confirms that exact active run, updates the displayed controller ph
 and renews its existing lease. It does not attach a lease to borrowed workloads.
 An expired lease stops only its matching run. Workload stop optionally accepts
 `run_id` to prevent a stale stop from terminating a replacement workload. Health
-reports `role: executor`, `controller_ui: true`, and `controller_leases: true`.
-Operator screens in NetEm are mounted below `/simulator`; polling and form actions
-stay on NetEm's origin. Local login/logout remain available for monitoring access.
+reports `role: executor`, `controller_settings_api: true`, and `controller_leases: true`.
+Native NetEm configuration lives under Settings → Traffic paths & network, Application experience targets, and Traffic agent & target. Tests automatically control workloads; manual traffic is an advanced option. Local login/logout remain available for monitoring access.
 
 Purpose-based full-workload routing and independent health probes are documented
 in [Traffic paths](TRAFFIC-PATHS.md). All path configuration/selection endpoints
