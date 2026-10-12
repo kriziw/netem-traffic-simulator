@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.9.1...v0.10.0) (2026-10-12)
+
+
+### Features
+
+* expose appliance inventory registration and target health APIs ([#33](https://github.com/kriziw/netem-traffic-simulator/issues/33)) ([4b1ae1b](https://github.com/kriziw/netem-traffic-simulator/commit/4b1ae1b6666df37fc30868bdb6002651576c5bce))
+
 ## [0.9.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.9.0...v0.9.1) (2026-10-11)
 
 
