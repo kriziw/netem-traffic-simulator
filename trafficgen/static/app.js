@@ -1,6 +1,42 @@
 window.TrafficGen = (() => {
   let cleanups=[];
   let busy=false;
+  const releaseChecks={simulator:null,target:null};
+  function paintReleaseCheck(scope){
+    const state=releaseChecks[scope],element=document.getElementById('release-check-'+scope);
+    if(!state||!element?.dataset?.releaseCheckIndicator)return;
+    element.hidden=false;
+    const className='check-feedback '+state.phase;
+    if(element.className!==className)element.className=className;
+    if(element.textContent!==state.message)element.textContent=state.message;
+    element.setAttribute('aria-busy',String(state.phase==='checking'));
+  }
+  function beginReleaseCheck(scope,initialId=''){
+    if(!(scope in releaseChecks))return;
+    releaseChecks[scope]={phase:'checking',initialId,message:scope==='target'?'Checking target releases…':'Checking simulator releases…'};
+    paintReleaseCheck(scope);
+  }
+  function finishReleaseCheck(scope,phase,message){
+    if(!releaseChecks[scope])return;
+    Object.assign(releaseChecks[scope],{phase,message});paintReleaseCheck(scope);
+  }
+  function releaseCheckState(state){
+    const job=state.job||{};
+    for(const [scope,action] of [['simulator','check_update'],['target','target_check']]){
+      if(state.busy&&job.action===action&&!releaseChecks[scope])beginReleaseCheck(scope);
+      const check=releaseChecks[scope];
+      if(check?.phase==='checking'&&state.busy&&job.action===action)check.message=scope==='target'?'Checking target releases…':'Checking simulator releases…';
+      if(check?.phase==='checking'&&!state.busy&&job.action===action&&job.id&&job.id!==check.initialId){
+        if(job.state==='failed')finishReleaseCheck(scope,'error','Check failed: '+(job.message||'Try again when the service is available.'));
+        else if(job.state==='completed'){
+          const release=scope==='target'?(state.target?.release||{}):(state.release||{});
+          const name=scope==='target'?'Target':'Simulator',version=release.display_tag||release.tag;
+          finishReleaseCheck(scope,version?'success':'error',version?(release.available?'Update available: '+version:name+' is up to date ('+version+').'):'The check finished without release information. Try again.');
+        }
+      }
+      paintReleaseCheck(scope);
+    }
+  }
   function repeat(fn, delay){const id=setInterval(fn,delay);cleanups.push(()=>clearInterval(id));}
   const animations=new WeakMap();
   function animatePath(element, path){
@@ -21,6 +57,8 @@ window.TrafficGen = (() => {
   async function updatePage(response){
     if(!response.ok)throw new Error("Request failed ("+response.status+"). Check status before retrying.");
     const next=new DOMParser().parseFromString(await response.text(),"text/html");
+    const rejection=next.querySelector('.flash-stack .flash.error');
+    if(rejection)for(const scope of Object.keys(releaseChecks))if(releaseChecks[scope]?.phase==='checking')finishReleaseCheck(scope,'error',rejection.textContent);
     const workspace=next.querySelector('main.workspace'),scripts=next.getElementById('page-scripts');
     if(!workspace||!scripts)throw new Error("Unexpected response. Please sign in again if your session expired.");
     const scroll=window.scrollY;
@@ -52,7 +90,9 @@ window.TrafficGen = (() => {
     event.preventDefault();if(busy)return;busy=true;
     const data=new FormData(form);if(event.submitter?.name)data.append(event.submitter.name,event.submitter.value);
     const buttons=[...form.querySelectorAll('button')],disabled=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);form.setAttribute('aria-busy','true');
-    try{await updatePage(await fetch(action.href,{method:'POST',body:data}));}catch(error){showError(error.message);}finally{buttons.forEach((b,i)=>b.disabled=disabled[i]);form.removeAttribute('aria-busy');busy=false;}
+    const check=form.dataset?.releaseCheck;
+    if(check)beginReleaseCheck(check,document.getElementById('system-job')?.dataset?.jobId||'');
+    try{await updatePage(await fetch(action.href,{method:'POST',body:data}));}catch(error){if(check)finishReleaseCheck(check,'error','Could not start the check. '+error.message);showError(error.message);}finally{buttons.forEach((b,i)=>b.disabled=disabled[i]);form.removeAttribute('aria-busy');busy=false;}
   });
 
   function fmt(value,digits=1){
@@ -282,6 +322,7 @@ window.TrafficGen = (() => {
     const jobStatus=document.getElementById('system-job');
     if(jobStatus.dataset.updating==='true'){updateScreen(jobStatus.dataset.version,jobStatus.dataset.release);return;}
     let previous=jobStatus.dataset.busy==='true';
+    for(const scope of Object.keys(releaseChecks))paintReleaseCheck(scope);
     document.getElementById('detected-appliance')?.addEventListener('change',event=>{
       const option=event.target.selectedOptions[0];if(!option?.value)return;
       fillAppliance(option.dataset);
@@ -290,6 +331,7 @@ window.TrafficGen = (() => {
       try{
         const response=await fetch('/settings/system/data',{cache:'no-store'});if(!response.ok)return;
         const state=await response.json();if(!alive)return;
+        releaseCheckState(state);
         renderTargetState(state);
         if(state.updating){updateScreen(state.version,state.release.display_tag||state.release.tag);return;}
         const job=state.job||{};
@@ -314,7 +356,9 @@ window.TrafficGen = (() => {
           const empty=document.createElement('option');empty.value='';empty.textContent='Select a discovered appliance…';
           select.replaceChildren(empty,...options);
         }
-      }catch(_){}
+      }catch(_){for(const scope of Object.keys(releaseChecks))if(releaseChecks[scope]?.phase==='checking'){
+        releaseChecks[scope].message='Waiting for the connection… retrying the '+scope+' check.';paintReleaseCheck(scope);
+      }}
     }poll();repeat(poll,2000);
   }
   function networkSetup(){
@@ -355,5 +399,5 @@ window.TrafficGen = (() => {
       },2000);
     }
   }
-  return {networkSetup,liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
+  return {beginReleaseCheck,releaseCheckState,networkSetup,liveStatus,demPage,renderTimestamps,mount,systemPage,refreshPage,animatePath,pathFor,fillAppliance,updatePhase,updateScreen,findingsHtml,egressRowsHtml,appRowsHtml,renderTargetState};
 })();
