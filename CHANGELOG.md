@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.13.1...v0.14.0) (2026-10-12)
+
+
+### Features
+
+* score business experience targets and retain unverified interface setup ([#43](https://github.com/kriziw/netem-traffic-simulator/issues/43)) ([7a55b38](https://github.com/kriziw/netem-traffic-simulator/commit/7a55b3857ff8b821400bf930e1c1b1597da647bc))
+
 ## [0.13.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.13.0...v0.13.1) (2026-10-12)
 
 
