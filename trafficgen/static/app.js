@@ -6,8 +6,9 @@ window.TrafficGen = (() => {
     const state=releaseChecks[scope],element=document.getElementById('release-check-'+scope);
     if(!state||!element?.dataset?.releaseCheckIndicator)return;
     element.hidden=false;
-    element.className='check-feedback '+state.phase;
-    element.textContent=state.message;
+    const className='check-feedback '+state.phase;
+    if(element.className!==className)element.className=className;
+    if(element.textContent!==state.message)element.textContent=state.message;
     element.setAttribute('aria-busy',String(state.phase==='checking'));
   }
   function beginReleaseCheck(scope,initialId=''){
