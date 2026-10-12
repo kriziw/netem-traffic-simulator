@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.10.0...v0.11.0) (2026-10-12)
+
+
+### Features
+
+* pin full workloads and independent probes to traffic paths ([#35](https://github.com/kriziw/netem-traffic-simulator/issues/35)) ([8724408](https://github.com/kriziw/netem-traffic-simulator/commit/8724408f86bc3dbbc6fb3799a5fd502756898a7d))
+
 ## [0.10.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.9.1...v0.10.0) (2026-10-12)
 
 
