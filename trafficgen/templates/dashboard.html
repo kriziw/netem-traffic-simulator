@@ -6,14 +6,14 @@
   <div>
     <div class="eyebrow">Corporate endpoint simulation</div>
     <h1>{{ instance_name }}</h1>
-    <p>Run realistic corporate user populations and watch digital experience as the network changes underneath them.</p>
+    <p>Observe the workload requested by NetEm, its active users and measured application experience.</p>
   </div>
-  <div class="actions">
+  {% if controller_ui %}<div class="actions">
     <a class="btn" href="{{ url_for('workloads') }}">Configure workload</a>
     {% if status.status not in ('starting','running') %}
     <a class="btn primary" href="{{ url_for('workloads') }}">Start simulation</a>
     {% endif %}
-  </div>
+  </div>{% endif %}
 </div>
 
 <div class="grid grid-4">
@@ -24,6 +24,13 @@
 </div>
 
 <div class="grid grid-2 space-top">
+  <section class="card"><div class="card-head"><div><div class="card-title">Controller execution</div><div class="card-sub">NetEm owns phases; this agent runs the requested workload</div></div></div><div class="card-body"><div class="kv">
+    <span>Site / workload</span><strong id="execution-site">{{ (status.run.label or status.run.profile) if status.run else 'Waiting for NetEm' }}</strong>
+    <span>NetEm phase</span><strong id="execution-phase">{{ status.run.controller_phase if status.run and status.run.controller_phase else 'No active test phase' }}</strong>
+    <span>Traffic path</span><strong id="execution-path">{{ status.run.traffic_path.name if status.run and status.run.traffic_path else 'No active workload path' }}</strong>
+    <span>Target</span><strong id="execution-target">{{ status.run.target if status.run else '—' }}</strong>
+    <span>Stop reason</span><strong id="execution-stop-reason">{{ status.run.stop_reason if status.run and status.run.stop_reason else '—' }}</strong>
+  </div></div></section>
   <section class="card">
     <div class="card-head">
       <div><div class="card-title">Live endpoint experience</div><div class="card-sub">Last 60 seconds across simulated users</div></div>
@@ -32,7 +39,7 @@
     <div class="card-body">
       <div class="experience-hero">
         <div class="experience-score" id="experience-score">{{ status.dem.experience_score if status.dem.experience_score is not none else '—' }}</div>
-        <div><div class="experience-rating" id="experience-rating">{{ status.dem.experience }}</div><div class="muted">Composite availability + response-time experience</div></div>
+        <div><div class="experience-rating" id="experience-rating">{{ status.dem.experience }}</div><div class="muted">Business-critical application experience</div></div>
       </div>
       <div class="metric-grid">
         <div><span>Requests/s</span><strong id="live-rps">{{ status.dem.requests_per_second }}</strong></div>
@@ -46,7 +53,7 @@
   </section>
 
   <section class="card">
-    <div class="card-head"><div><div class="card-title">Current workload</div><div class="card-sub">Population and traffic pattern</div></div></div>
+    <div class="card-head"><div><div class="card-title">Requested workload</div><div class="card-sub">Current or most recent request from NetEm</div></div></div>
     <div class="card-body">
       {% if status.run %}
       <div class="kv">
@@ -57,12 +64,12 @@
         <span>Target</span><strong class="mono">{{ status.run.target }}</strong>
         <span>Stage</span><strong>{{ status.run.stage.label if status.run.stage else 'Starting' }}</strong>
       </div>
-      <div class="actions space-top">
+      {% if controller_ui %}<div class="actions space-top">
         <a class="btn" href="{{ url_for('workloads') }}">Adjust</a>
         <form method="post" action="{{ url_for('workload_stop_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn danger" type="submit">Stop workload</button></form>
-      </div>
+      </div>{% endif %}
       {% else %}
-      <div class="empty">No workload is running. Start a profile from Workloads.</div>
+      <div class="empty">Waiting for a workload command from NetEm.</div>
       {% endif %}
     </div>
   </section>

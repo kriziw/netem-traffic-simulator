@@ -1,5 +1,17 @@
 # NetEm Traffic Simulator
 
+NetEm is the controller; this service is the executing agent. Its local browser
+UI is a read-only execution/experience monitor. All operator controls—including
+network setup, scoring targets, workloads, updates and target management—are
+available under **NetEm → Platform Health → Simulator controls**. Update both
+components together. Existing integration keys remain valid. On a fresh install,
+use the installer-provided integration key (or retrieve `/etc/netem-traffic-simulator/api.key`
+as root) to connect NetEm before opening its control screens.
+
+Test-owned workloads use controller heartbeats and stop after their 30-second
+lease expires if NetEm disappears. Existing workloads borrowed by a test remain
+independent. The agent displays NetEm's phase, executing run/path and stop reason.
+
 The full HTTP/UDP workload can be pinned to an appliance, a direct NetEm/ISP path,
 or a clean router baseline while independent health probes use other interfaces.
 See [purpose-based traffic paths](docs/TRAFFIC-PATHS.md) for Proxmox wiring,

@@ -11,7 +11,7 @@
   <div class="range-select"><select id="dem-range"><option value="5">5 min</option><option value="15" selected>15 min</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option></select></div>
 </div>
 
-<details class="card space-top"><summary class="card-head">Business experience targets</summary>
+{% if controller_ui %}<details class="card space-top"><summary class="card-head">Business experience targets</summary>
   <div class="card-body"><p>Only checked business-critical applications limit the overall score. Completed work must also meet its deadline. UDP variation is measured from round-trip echo timing, not one-way jitter. Transfer targets use transfers of at least 64 KiB; sustained goodput counts successful completed payload bytes over the entire measurement window, including user pauses. Set sustained minimums only when the workload should demand that speed. 0 disables speed scoring. Stop the workload before editing targets.</p>
     <form method="post" action="{{ url_for('experience_settings_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="table-wrap"><table><thead><tr><th>Application</th><th>Critical</th><th>Deadline ms</th><th>UDP RTT variation ms (0 disables)</th><th>UDP loss %</th><th>Transfer download minimum Mbit/s</th><th>Transfer upload minimum Mbit/s</th><th>Sustained download minimum Mbit/s</th><th>Sustained upload minimum Mbit/s</th></tr></thead><tbody>
@@ -22,7 +22,7 @@
     <button class="btn primary" {% if status.status in ['starting','running'] %}disabled{% endif %}>Save experience targets</button>
     </form>
   </div>
-</details>
+</details>{% endif %}
 
 <div class="grid grid-4">
   <div class="stat"><span>Experience</span><strong id="dem-score">{{ summary.experience_score if summary.experience_score is not none else '—' }}</strong><small id="dem-rating">{{ summary.experience }}</small></div>

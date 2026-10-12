@@ -35,9 +35,9 @@ def test_api_auth_and_admin_ui(tmp_path, monkeypatch):
     assert login.status_code in (302, 303)
 
     assert client.get("/").status_code == 200
-    assert client.get("/workloads").status_code == 200
+    assert client.get("/workloads").status_code == 302
     assert client.get("/dem").status_code == 200
-    assert client.get("/settings/api").status_code == 200
+    assert client.get("/settings/api").status_code == 302
     assert client.get("/dem/data?minutes=15").status_code == 200
 
     catalog = client.get(

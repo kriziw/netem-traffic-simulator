@@ -9,6 +9,15 @@ function context(){
   vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
   return {ui:window.TrafficGen,frame:now=>callback(now)};
 }
+
+test('controller polling stays on the NetEm mounted origin',async()=>{
+  let requested;
+  const ctx={window:{TrafficGenControllerPrefix:'/simulator',fetch:async url=>{requested=url;return {ok:true,json:async()=>({status:'idle',dem:{}})}}},
+    document:{addEventListener(){},getElementById(){return null}},setInterval(){return 1},clearInterval(){}};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  await ctx.window.TrafficGen.liveStatus();
+  assert.equal(requested,'/simulator/ui/status');
+});
 test('DEM animation reaches exact samples, with real gaps retained',()=>{
   const {ui,frame}=context();
   const path={d:'M0,40 L100,40',getAttribute(){return this.d},setAttribute(_,v){this.d=v}};

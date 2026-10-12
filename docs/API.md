@@ -1,5 +1,26 @@
 # API
 
+## Controller and executor contract
+
+The local UI is read-only; authenticated REST commands remain available to NetEm.
+`POST /api/v1/controller/view` takes a fixed screen `path`, `method` (`GET`/`POST`),
+text-valued `fields`/`query`, and the controller's `csrf_token`. It returns screen
+body/content type/status, constrained local navigation and flash messages. It reuses
+existing operator validation, routing locks and administration queues. Arbitrary
+URLs, API paths and static files are refused. The response to successful API-key
+rotation includes the replacement credential so NetEm can securely update its
+integration; the controller must never log this response.
+
+Workload start optionally accepts integer `controller_lease_seconds` (15–120).
+`POST /api/v1/controller/heartbeat` accepts `run_id` and optional `phase` (≤120
+characters), confirms that exact active run, updates the displayed controller phase
+and renews its existing lease. It does not attach a lease to borrowed workloads.
+An expired lease stops only its matching run. Workload stop optionally accepts
+`run_id` to prevent a stale stop from terminating a replacement workload. Health
+reports `role: executor`, `controller_ui: true`, and `controller_leases: true`.
+Operator screens in NetEm are mounted below `/simulator`; polling and form actions
+stay on NetEm's origin. Local login/logout remain available for monitoring access.
+
 Purpose-based full-workload routing and independent health probes are documented
 in [Traffic paths](TRAFFIC-PATHS.md). All path configuration/selection endpoints
 require the simulator integration key and use the verified host queue.
