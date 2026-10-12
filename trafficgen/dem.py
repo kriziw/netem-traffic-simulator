@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from .database import query_transactions
 from .profiles import APPLICATIONS
+from .experience_policy import default_policy, load_policy
 
 
 def percentile(values, pct):
@@ -34,8 +35,21 @@ def latency_score(p95_ms, application=None):
     if value >= poor * 2:
         return 0.0
     if value <= poor:
-        return 100.0 - ((value - good) / max(1.0, poor - good)) * 45.0
-    return max(0.0, 55.0 - ((value - poor) / max(1.0, poor)) * 55.0)
+        return 100.0 - ((value - good) / max(1.0, poor - good)) * 65.0
+    return max(0.0, 35.0 - ((value - poor) / max(1.0, poor)) * 35.0)
+
+
+def reliability_score(availability):
+    """99% success is healthy; 95% is fair and 90% is critical.
+
+    Raw availability is not an experience score: 5% failed work must not
+    contribute 95 points toward a green result.
+    """
+    if availability >= 99:
+        return 100.0
+    if availability >= 95:
+        return 55.0 + (availability - 95.0) * 45.0 / 4.0
+    return max(0.0, (availability - 90.0) * 55.0 / 5.0)
 
 
 def score_label(score):
@@ -52,7 +66,63 @@ def score_label(score):
     return "Critical"
 
 
-def summarize_rows(rows, application=None):
+def quality_components(rows, targets, window_seconds=60):
+    """Score fulfillment of usable-work targets, retaining measurement coverage."""
+    components, evidence, missing = {}, {}, []
+    timed = [row for row in rows if not row["success"] or row.get("response_time_ms") is not None]
+    if len(timed) != len(rows):
+        missing.append("deadline")
+    if timed:
+        on_time = sum(bool(row["success"] and row["response_time_ms"] <= targets["deadline_ms"]) for row in timed)
+        evidence["on_time_pct"] = round(on_time * 100 / len(timed), 3)
+        evidence["deadline_misses"] = sum(bool(row["success"] and row["response_time_ms"] > targets["deadline_ms"]) for row in timed)
+        components["deadline"] = reliability_score(on_time * 100 / len(timed))
+    bursts = [row for row in rows if row.get("packets_sent")]
+    if bursts:
+        known = [row for row in bursts if row.get("packets_lost") is not None]
+        if len(known) != len(bursts):
+            missing.append("udp_loss")
+        if known:
+            sent = sum(row["packets_sent"] for row in known)
+            lost = sum(row["packets_lost"] for row in known)
+            evidence["udp_loss_pct"] = round(lost * 100 / sent, 3)
+            met = sum(row["packets_lost"] * 100 / row["packets_sent"] <= targets["loss_max_pct"] for row in known)
+            components["udp_loss"] = reliability_score(met * 100 / len(known))
+        if targets["jitter_max_ms"] > 0:
+            known = [row for row in bursts if row.get("udp_jitter_ms") is not None]
+            if len(known) != len(bursts):
+                missing.append("udp_rtt_variation")
+            if known:
+                evidence["udp_rtt_variation_p95_ms"] = round(percentile([row["udp_jitter_ms"] for row in known], .95), 3)
+                met = sum(row["udp_jitter_ms"] <= targets["jitter_max_ms"] for row in known)
+                components["udp_rtt_variation"] = reliability_score(met * 100 / len(known))
+    for direction, field in (("down", "response_length"), ("up", "bytes_up")):
+        sustained_minimum = targets.get(f"min_sustained_{direction}_mbps", 0)
+        if sustained_minimum > 0:
+            transfers = [row for row in rows if (row.get(field) or 0) >= 65536]
+            if not transfers:
+                missing.append(f"sustained_{direction}")
+            else:
+                rate = sum(row[field] for row in transfers if row["success"]) * 8 / (window_seconds * 1000000)
+                evidence[f"sustained_{direction}_mbps"] = round(rate, 3)
+                # A missed explicit minimum cannot label the application good.
+                components[f"sustained_{direction}"] = 100.0 if rate >= sustained_minimum else min(74.0, 100 * rate / sustained_minimum)
+        minimum = targets[f"min_{direction}_mbps"]
+        if minimum <= 0:
+            continue
+        transfers = [row for row in rows if (row.get(field) or 0) >= 65536]
+        known = [row for row in transfers if row.get("response_time_ms") and row["response_time_ms"] > 0]
+        if not known or len(known) != len(transfers):
+            missing.append(f"throughput_{direction}")
+        if known:
+            rates = [row[field] * 8 / (row["response_time_ms"] * 1000) if row["success"] else 0 for row in known]
+            evidence[f"transfer_{direction}_p05_mbps"] = round(percentile(rates, .05), 3)
+            components[f"throughput_{direction}"] = reliability_score(sum(rate >= minimum for rate in rates) * 100 / len(rates))
+    return components, evidence, missing
+
+
+def summarize_rows(rows, application=None, policy=None, window_seconds=60):
+    policy = policy if policy is not None else default_policy()
     total = len(rows)
     if not total:
         return {
@@ -66,6 +136,8 @@ def summarize_rows(rows, application=None):
             "experience_score": None,
             "experience": "No data",
             "bytes": 0,
+            "scoring_complete": False,
+            "limiting_application": None,
         }
     successes = [row for row in rows if row["success"]]
     latencies = [
@@ -76,17 +148,32 @@ def summarize_rows(rows, application=None):
     availability = len(successes) * 100.0 / total
     p95 = percentile(latencies, 0.95)
     if application is not None:
+        targets = policy.get(application, {"critical": True, "deadline_ms": 400,
+                            "jitter_max_ms": 0, "loss_max_pct": 0,
+                            "min_down_mbps": 0, "min_up_mbps": 0})
         latency_component = latency_score(p95, application)
+        components, evidence, missing = quality_components(rows, targets, window_seconds)
+        components["reliability"] = reliability_score(availability)
+        if latency_component is not None:
+            components["response_time"] = latency_component
+        score = min(components.values())
+        extra = {"critical": targets["critical"], "score_components": components,
+                 "quality": evidence, "experience_targets": targets, "missing_measurements": missing,
+                 "scoring_complete": not missing, "limiting_application": application}
     else:
         groups = defaultdict(list)
-        for row in successes:
-            if row["response_time_ms"] is not None:
-                groups[row.get("application")].append(float(row["response_time_ms"]))
-        latency_component = (sum(len(values) * latency_score(percentile(values, 0.95), key)
-                                 for key, values in groups.items()) / sum(map(len, groups.values()))
-                             if groups else None)
-    score = availability if latency_component is None else availability * 0.65 + latency_component * 0.35
-    score = max(0.0, min(100.0, score))
+        for row in rows:
+            groups[row.get("application") or "other"].append(row)
+        # Include failed-only applications. Healthy/bulk traffic must never
+        # average away an outage in a less frequently used business application.
+        summaries = {key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds) for key, items in groups.items()}
+        critical = {key: item for key, item in summaries.items() if item["critical"]}
+        limiting = min(critical, key=lambda key: critical[key]["experience_score"]) if critical else None
+        score = critical[limiting]["experience_score"] if limiting else None
+        extra = {"limiting_application": limiting, "critical_applications": sorted(critical),
+                 "scoring_complete": bool(critical) and all(item["scoring_complete"] for item in critical.values()),
+                 "missing_measurements": {key: item["missing_measurements"] for key, item in critical.items() if item["missing_measurements"]}}
+    score = max(0.0, min(100.0, score)) if score is not None else None
     return {
         "requests": total,
         "successes": len(successes),
@@ -95,9 +182,10 @@ def summarize_rows(rows, application=None):
         "p50_ms": round(percentile(latencies, 0.50), 3) if latencies else None,
         "p95_ms": round(p95, 3) if p95 is not None else None,
         "average_ms": round(statistics.mean(latencies), 3) if latencies else None,
-        "experience_score": round(score, 2),
-        "experience": score_label(score),
+        "experience_score": round(score, 2) if score is not None else None,
+        "experience": "Incomplete evidence" if score is not None and score >= 75 and not extra["scoring_complete"] else score_label(score),
         "bytes": sum(int(row["response_length"] or 0) for row in rows),
+        **extra,
     }
 
 
@@ -109,7 +197,8 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     window_seconds = max(10, min(3600, int(window_seconds)))
     since = now - window_seconds
     rows = query_transactions(database_path, since, run_id=run_id, limit=50000)
-    overall = summarize_rows(rows)
+    policy = load_policy(database_path)
+    overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds)
 
     by_app = defaultdict(list)
     by_persona = defaultdict(list)
@@ -124,21 +213,21 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
             endpoint_persona[endpoint_id] = row["persona"] or "unknown"
 
     app_summary = {
-        key: summarize_rows(items, application=key)
+        key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds)
         for key, items in sorted(by_app.items())
     }
     if diagnosis:
         for key, items in by_app.items():
             app_summary[key].update(application_detail(key, items))
     persona_summary = {
-        key: summarize_rows(items)
+        key: summarize_rows(items, policy=policy, window_seconds=window_seconds)
         for key, items in sorted(by_persona.items())
     }
     endpoint_summary = {}
     for key, items in by_endpoint.items():
         if key == "unknown":
             continue
-        summary = summarize_rows(items)
+        summary = summarize_rows(items, policy=policy, window_seconds=window_seconds)
         summary["endpoint_id"] = key
         summary["persona"] = endpoint_persona.get(key, "unknown")
         endpoint_summary[key] = summary
@@ -163,6 +252,6 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         "endpoints": endpoint_summary,
     }
     if diagnosis:
-        result["diagnosis"] = diagnose(rows, app_summary, media_mode)
+        result["diagnosis"] = diagnose(rows, app_summary, media_mode, scoring_policy=policy, window_seconds=window_seconds)
         result["interactive_p95_ms"] = result["diagnosis"]["interactive_p95_ms"]
     return result

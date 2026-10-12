@@ -140,7 +140,10 @@ window.TrafficGen = (() => {
       const rate=[item.median_down_mbps!=null?"↓ "+fmt(item.median_down_mbps,1):null,item.median_up_mbps!=null?"↑ "+fmt(item.median_up_mbps,1):null].filter(Boolean).join(" · ");
       const media=item.media?fmt(item.media.loss_pct,2)+"% · "+(item.media.bursts_with_loss+item.media.no_reply)+"/"+item.media.bursts+" bursts":"—";
       const top=item.top_cause?esc((labels||{})[item.top_cause]||words(item.top_cause))+" ×"+(item.causes||{})[item.top_cause]:"—";
-      return "<tr><td>"+esc(words(key))+"</td><td>"+(item.experience_score??"—")+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
+      const quality=item.quality||{},components=Object.entries(item.score_components||{}).sort((a,b)=>a[1]-b[1]);
+      const limiter=components.length?esc(words(components[0][0])):"—";
+      return "<tr><td>"+esc(words(key))+(item.critical?' · critical':'')+"</td><td>"+(item.experience_score??"—")+" · "+limiter+(item.scoring_complete===false?' · incomplete evidence':'')+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
+        "</td><td>"+(quality.on_time_pct==null?'—':fmt(quality.on_time_pct,1)+'%')+"</td><td>"+ms(quality.udp_rtt_variation_p95_ms)+
         "</td><td>"+ms(item.p95_ms)+"</td><td>"+ms(item.p95_wait_ms)+"</td><td>"+ms(item.p95_transfer_ms)+"</td><td>"+(rate?rate+" Mbit/s":"—")+
         "</td><td>"+media+"</td><td>"+top+"</td><td>"+item.requests+"</td></tr>";
     }).join("");
@@ -371,9 +374,11 @@ window.TrafficGen = (() => {
         form.querySelector('[name="wiring_confirmed"]').checked=false;
       });
       const configure=form.querySelector('[data-setup-configure]');
+      const save=form.querySelector('[data-setup-save]');
       if(configure)form.addEventListener('input',()=>{
         dirty=true;
         configure.disabled=configure.dataset.locked==='true'||!form.querySelector('[name="address"]').value||!form.querySelector('[name="gateway"]').value;
+        if(save)save.disabled=save.dataset.locked==='true'||!form.querySelector('[name="address"]').value||!form.querySelector('[name="gateway"]').value;
       });
     });
     const poll=document.querySelector?.('[data-setup-poll]');

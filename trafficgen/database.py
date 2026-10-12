@@ -12,6 +12,7 @@ from pathlib import Path
 DIAGNOSIS_COLUMNS = (
     ("cause", "TEXT"), ("wait_ms", "REAL"), ("transfer_ms", "REAL"), ("bytes_up", "INTEGER"),
     ("status_code", "INTEGER"), ("packets_sent", "INTEGER"), ("packets_lost", "INTEGER"), ("egress", "TEXT"),
+    ("udp_jitter_ms", "REAL"),
 )
 TRANSACTION_FIELDS = (
     "timestamp", "run_id", "endpoint_id", "persona", "application", "request_type", "name",

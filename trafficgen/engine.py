@@ -318,8 +318,14 @@ class CorporateUser(HttpUser):
             if sock is not None:
                 sock.close()
         context = self._context(application)
+        # Variation of RTT between adjacent delivered packet sequences. This is
+        # round-trip variation, not a one-way jitter measurement or codec MOS.
+        variations = [abs(received[sequence] - received[sequence - 1])
+                      for sequence in sorted(received) if sequence - 1 in received]
+        from .dem import percentile
         context.update(packets_sent=len(sent_times), packets_lost=len(sent_times) - len(received),
-                       egress=observed.get("egress"))
+                       egress=observed.get("egress"),
+                       udp_jitter_ms=percentile(variations, 0.95) if variations else None)
         self.environment.events.request.fire(
             request_type="UDP",
             name=f"{application}/media-burst",
@@ -519,6 +525,7 @@ class WorkloadController:
             "status_code": details["status_code"],
             "packets_sent": ctx.get("packets_sent"),
             "packets_lost": ctx.get("packets_lost"),
+            "udp_jitter_ms": ctx.get("udp_jitter_ms"),
             "egress": ctx.get("egress") or details["egress"],
         }
         try:

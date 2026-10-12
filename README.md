@@ -181,10 +181,36 @@ It then calculates:
 - **individual endpoint experience**
 - aggregate 0–100 experience score
 
-The experience score currently weights:
+The overall score is the lowest measured business-critical application score.
+Interactive business apps, voice/video and OT telemetry are critical by default;
+bulk apps are opt-in. Edit criticality and quality targets in **Digital Experience
+→ Business experience targets** while stopped. Each application uses its lowest
+reliability, P95 response-time and configured quality score:
 
-- availability: 65%
-- application-aware P95 response-time score: 35%
+- Reliability: 99–100% success scores 100; 95% scores 55; 90% or less scores 0,
+  with linear interpolation between those points.
+- Response time: the application's good threshold scores 100, its poor threshold
+  scores 35, and twice the poor threshold scores 0, with linear interpolation.
+- Deadline fulfillment: failed work and completed work above the editable deadline
+  are unusable. The percentage meeting the deadline uses the reliability curve.
+- UDP loss/variation: the percentage of bursts meeting each target uses the same
+  curve. Variation is P95 across burst P95 differences between adjacent delivered
+  packet RTTs, not one-way jitter or codec MOS. Defaults: 30 ms variation, voice
+  2% loss, video 1%, OT 0%. Transport success still uses the chosen media mode.
+- Transfer speed: explicitly enabled minimums score the percentage of transfers
+  meeting the target. Payloads must be at least 64 KiB; rate uses full completion time.
+- Sustained goodput: completed successful payload bytes divided by the whole
+  measurement window, including user pauses. Below an explicit minimum the score
+  is `min(74, 100 × achieved / minimum)`. This measures workload goodput, not
+  available WAN capacity. All speed targets default to 0 (disabled).
+
+An application with only failed transactions scores 0. Applications without samples
+are not scored. No measured critical applications means no overall score. Missing
+required evidence marks scoring incomplete and prevents a NetEm overall pass.
+Even a small critical sample can limit the score; inspect application sample counts.
+Saved historical scores remain unchanged; transaction summaries use current targets.
+No extra probe traffic is generated. NetEm also requires aggregate request success
+and interactive response time to meet the active site's targets for an overall pass.
 
 This is intentionally transparent synthetic DEM, not a proprietary vendor score.
 

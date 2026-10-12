@@ -270,6 +270,10 @@ def test_media_mode_decides_how_much_loss_fails_a_burst(mode, drop, fails):
     assert event["context"]["packets_sent"] == 50 and event["context"]["packets_lost"] == len(drop)
     assert event["context"]["egress"] == (None if len(drop) == 50 else "198.18.2.2")
     if len(drop) == 50:
+        assert event["context"]["udp_jitter_ms"] is None
+    else:
+        assert event["context"]["udp_jitter_ms"] >= 0
+    if len(drop) == 50:
         assert classify_failure(event["exception"]) == "media_no_reply"
 
 
@@ -283,9 +287,10 @@ def test_new_columns_migrate_and_round_trip(tmp_path):
     init_db(db)
     init_db(db)
     assert recent_runs(db)[0]["media_mode"] == "strict"
-    record_transaction(db, row(application="voice", cause="media_loss", packets_sent=50, packets_lost=1, egress="198.18.2.2"))
+    record_transaction(db, row(application="voice", cause="media_loss", packets_sent=50, packets_lost=1, egress="198.18.2.2", udp_jitter_ms=12.5))
     rows = query_transactions(db, 0)
     assert rows[0]["cause"] is None and rows[1]["packets_lost"] == 1 and rows[1]["egress"] == "198.18.2.2"
+    assert rows[0]["udp_jitter_ms"] is None and rows[1]["udp_jitter_ms"] == 12.5
     # Legacy rows without a stored cause are still explained from their error text.
     assert dem_summary(db, window_seconds=60)["diagnosis"]["causes"]["media_no_reply"] == 1
 

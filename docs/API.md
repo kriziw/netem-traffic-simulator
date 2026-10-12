@@ -126,7 +126,27 @@ The DEM API is designed for NetEm and other controllers that want to understand 
 
 ### `GET /api/v1/dem/experience?window=60`
 
-Returns experience score (0–100), experience rating, availability, P50/P95 response time, interactive P95 (web, collaboration and DNS only), requests/s, failures/s, active users, application summaries, persona summaries and `diagnosis`.
+Returns experience score (0–100), experience rating, availability, P50/P95 response time, interactive P95 (all interactive applications), requests/s, failures/s, active users, application summaries, persona summaries and `diagnosis`.
+
+Experience is the lowest measured business-critical application score. Each application takes the
+lowest of its configured quality scores, reliability and application-specific successful-response P95
+score. Reliability scores 100 at 99% success, 55 at 95%, and 0 at 90% or less.
+Response scores 100 at the application's good threshold, 35 at its poor threshold,
+and 0 at twice its poor threshold. Between these points scores are linear. An
+application with only failures scores 0; unmeasured/noncritical applications do not limit the overall score.
+Small application samples can limit the overall score. Transaction success remains
+the measured outcome, not a label inferred from a site response-time target.
+Previously stored historical scores retain their original calculation.
+
+Overall summaries add `limiting_application`, `critical_applications`,
+`scoring_complete` and `missing_measurements`. Application summaries add `critical`,
+`score_components`, `experience_targets` and `quality` (deadline fulfillment/misses,
+UDP loss and RTT variation, configured transfer and sustained-goodput measurements).
+Deadline, UDP and per-transfer components use the reliability curve on the fraction
+of known samples meeting each target. Missing evidence is never treated as success.
+No measured critical application means a null overall score. Edit settings in the
+authenticated simulator's Digital Experience page while stopped. Policy is atomically
+stored beside the database. See README for defaults, units and sustained-rate scoring.
 
 ### Diagnosis
 

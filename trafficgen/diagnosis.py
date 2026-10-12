@@ -228,14 +228,14 @@ def application_detail(app, rows):
     return detail
 
 
-def egress_breakdown(rows):
+def egress_breakdown(rows, scoring_policy=None, window_seconds=60):
     """Experience per appliance egress address; no-reply failures stay 'unknown'."""
     groups = defaultdict(list)
     for row in rows:
         groups[row.get("egress") or UNKNOWN_EGRESS].append(row)
     result = {}
     for address, items in sorted(groups.items()):
-        summary = summarize_rows(items)
+        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds)
         apps = defaultdict(lambda: [0, 0, []])
         for row in items:
             counts = apps[row.get("application") or "other"]
@@ -457,7 +457,7 @@ def target_finding(info, simulator_version):
     }
 
 
-def diagnose(rows, applications, media_mode="strict", now=None):
+def diagnose(rows, applications, media_mode="strict", now=None, scoring_policy=None, window_seconds=60):
     """Explain the window: failure causes, interactive response time, experience per
     egress address and ordered findings. `applications` is `application_detail` per app."""
     media_mode = media_mode if media_mode in MEDIA_MODES else "strict"
@@ -472,7 +472,7 @@ def diagnose(rows, applications, media_mode="strict", now=None):
         "cause_labels": CAUSES,
         "interactive_p95_ms": _round(percentile(interactive, 0.95), 3),
         "causes": dict(Counter(row_cause(row) for row in rows if not row["success"]).most_common()),
-        "egress": egress_breakdown(rows),
+        "egress": egress_breakdown(rows, scoring_policy, window_seconds),
         "egress_recent": recent_egress(rows, now),
         "findings": findings,
     }

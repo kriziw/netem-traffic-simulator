@@ -1,5 +1,6 @@
 import json
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,10 +27,15 @@ def test_detection_prefills_addresses_without_claiming_bridge_discovery():
     assert wan["interface"] == "eth2" and wan["address_ready"]
     assert wan["bridge"] == "vmbr1"
     assert next(row for row in cards if row["role"] == "wan2")["nic"] is None
+    draft = network_setup.definition(RAW)
+    old = network_setup.payload(draft)
+    assert next(row for row in network_setup.cards({"wan1": draft}, NICS, [old]) if row["role"] == "wan1")["path"]
+    draft["gateway"] = "10.251.10.2"
+    assert next(row for row in network_setup.cards({"wan1": draft}, NICS, [old]) if row["role"] == "wan1")["path"] is None
 
 
 def test_worker_validates_before_mutation_and_reports_partial_success():
-    from trafficgen import host_admin
+    host_admin = SimpleNamespace(management=lambda: "eth0", configure_interface=Mock())
     row = network_setup.definition(RAW)
     with patch.object(network_setup, "validate_interface", side_effect=ValueError("management overlap")), \
          patch.object(host_admin, "configure_interface") as configure:
@@ -39,9 +45,17 @@ def test_worker_validates_before_mutation_and_reports_partial_success():
     with patch.object(network_setup, "validate_interface", return_value={"interface":"eth2","address":row["address"]}), \
          patch.object(host_admin, "configure_interface") as configure, \
          patch.object(traffic_paths, "configure", side_effect=ValueError("Target unavailable")):
-        with pytest.raises(ValueError, match="Interface address saved, but path verification failed"):
-            network_setup.configure({"path":network_setup.payload(row), "address":row["address"]}, host_admin)
+        result = network_setup.configure({"path":network_setup.payload(row), "address":row["address"]}, host_admin)
+        assert result["verified"] is False
+        assert "Interface address saved, but path verification failed" in result["warning"]
         configure.assert_called_once()
+    with patch.object(network_setup, "validate_interface", return_value={"interface":"eth2","address":row["address"]}), \
+         patch.object(host_admin, "configure_interface") as configure, \
+         patch.object(traffic_paths, "configure") as verify:
+        result = network_setup.configure({"path":network_setup.payload(row), "address":row["address"], "verify":False}, host_admin)
+        assert result["verified"] is False and "without path verification" in result["warning"]
+        configure.assert_called_once()
+        verify.assert_not_called()
 
 
 def test_setup_authentication_save_apply_idle_guard_and_errors(simulator, tmp_path, monkeypatch):
@@ -74,5 +88,8 @@ def test_setup_authentication_save_apply_idle_guard_and_errors(simulator, tmp_pa
         with patch.object(simulator.config["TRAFFICGEN_CONTROLLER"], "status", return_value={"status":"running"}):
             assert client.post("/settings/network-setup", data=dict(RAW, action="configure")).status_code == 400
         assert enqueue.call_count == 1
+        assert client.post("/settings/network-setup", data=dict(RAW, action="save_interface")).status_code == 302
+        assert enqueue.call_args.args[2]["verify"] is False
+        assert client.get("/settings/network-setup?interface=eth2&role=wan1").data.count(b"Saved setup") == 1
         bad = client.post("/settings/network-setup", data=dict(RAW, gateway="8.8.8.8"))
         assert bad.status_code == 400 and b'value="8.8.8.8"' in bad.data
