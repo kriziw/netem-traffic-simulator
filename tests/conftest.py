@@ -12,5 +12,11 @@ def simulator(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "target_egress", lambda host: None)
     application = module.create_app()
     application.config.update(TESTING=True)
+    # Existing operator-view tests exercise the views as delegated controller
+    # screens. Read-only boundary tests remove this fixture hook explicitly.
+    from flask import g
+    def delegated_operator_test():
+        g.controller_ui = True
+    application.before_request_funcs[None].insert(0, delegated_operator_test)
     yield application
     application.config["TRAFFICGEN_CONTROLLER"].shutdown()

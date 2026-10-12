@@ -12,31 +12,35 @@
     <div class="brand">
       <div class="brand-mark">NT</div>
       <div>
-        <div class="brand-name">Traffic Simulator</div>
-        <div class="brand-sub">NetEm companion</div>
+        <div class="brand-name">{{ 'NetEm · Simulator controls' if controller_ui else 'Traffic execution agent' }}</div>
+        <div class="brand-sub">{{ 'Controlled from NetEm' if controller_ui else 'Read-only execution monitor' }}</div>
       </div>
     </div>
 
     <nav>
-      <div class="nav-group">Operate</div>
-      <a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Command Center</a>
+      <div class="nav-group">{{ 'Operate' if controller_ui else 'Observe' }}</div>
+      {% if controller_ui %}<a class="nav-link" href="/">Back to NetEm</a>{% endif %}
+      <a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Execution status</a>
+      {% if controller_ui %}
       <a class="nav-link {% if page == 'workloads' %}active{% endif %}" href="{{ url_for('workloads') }}">Workloads</a>
       <a class="nav-link {% if page == 'paths' %}active{% endif %}" href="{{ url_for('traffic_paths_ui') }}">Traffic paths</a>
+      {% endif %}
       <a class="nav-link {% if page == 'dem' %}active{% endif %}" href="{{ url_for('dem_page') }}">Digital Experience</a>
 
-      <div class="nav-group">System</div>
+      {% if controller_ui %}<div class="nav-group">System</div>
       <a class="nav-link {% if page == 'network_setup' %}active{% endif %}" href="{{ url_for('network_setup_ui') }}">Network setup</a>
       <a class="nav-link {% if page == 'system' %}active{% endif %}" href="{{ url_for('system_settings') }}">Updates & Appliance Routing</a>
       <a class="nav-link {% if page == 'api' %}active{% endif %}" href="{{ url_for('api_settings') }}">API & Integration</a>
+      {% endif %}
     </nav>
 
     <div class="sidebar-bottom">
       <div class="lab-label">LAB USE ONLY</div>
       <div class="small">Locust-powered corporate endpoint simulation</div>
       <div class="small mono">v{{ app_version }}</div>
-      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if not controller_ui %}<form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="link-button" type="submit">Sign out</button>
-      </form>
+      </form>{% endif %}
     </div>
   </aside>
 
@@ -66,10 +70,12 @@
     {% endwith %}
 
     <div class="page">
+      {% if not controller_ui %}<p class="note">NetEm controls test phases, traffic, network setup, experience targets and maintenance. This page only monitors execution and measured results.</p>{% endif %}
       {% block content %}{% endblock %}
     </div>
   </main>
 </div>
+<script>window.TrafficGenControllerPrefix={{ controller_prefix|tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <template id="page-scripts">{% block scripts %}{% endblock %}</template>
 <script>TrafficGen.mount();</script>

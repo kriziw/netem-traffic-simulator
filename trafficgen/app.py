@@ -152,6 +152,16 @@ def create_app():
             if not supplied or not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
                 return {"error": "Invalid form token. Reload the page and retry."}, 400
 
+    @app.before_request
+    def execution_monitor_only():
+        if getattr(g, 'controller_ui', False) or request.path.startswith('/api/v1/'):
+            return None
+        if request.method == 'POST' and request.endpoint not in ('login_post', 'logout'):
+            return {'error': 'This execution agent is read-only. Use NetEm to issue commands.'}, 403
+        if request.method == 'GET' and request.path in (
+                '/workloads', '/traffic-paths', '/settings/network-setup', '/settings/system', '/settings/api'):
+            return redirect(url_for('dashboard'))
+
     @app.after_request
     def private_responses(response):
         if request.path != "/api/v1/health":
@@ -168,6 +178,8 @@ def create_app():
             "app_version": __version__,
             "instance_name": settings.instance_name,
             "controller_status": app.config["TRAFFICGEN_CONTROLLER"].status(),
+            "controller_ui": bool(getattr(g, 'controller_ui', False)),
+            "controller_prefix": request.script_root if getattr(g, 'controller_ui', False) else '',
         }
 
     def host_available(require_idle=False):
@@ -205,13 +217,22 @@ def create_app():
         return payload
 
     def start_workload(payload):
+        payload = dict(payload)
+        lease_seconds = payload.pop('controller_lease_seconds', None)
+        if lease_seconds is not None and (isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or not 15 <= lease_seconds <= 120):
+            raise ValueError('Controller lease must be 15–120 seconds.')
         payload = routed_payload(payload)
         selected = maintenance.status(settings).get("selected") or {}
         if selected.get("policy_table"):
             if not traffic_paths.policy_status(selected, management=management_interface())["active"]:
                 raise ValueError("Selected path policy is inactive; workload fallback is refused.")
-            return app.config["TRAFFICGEN_CONTROLLER"].start(payload, traffic_path=traffic_paths.metadata(selected))
-        return app.config["TRAFFICGEN_CONTROLLER"].start(payload)
+            result = app.config["TRAFFICGEN_CONTROLLER"].start(payload, traffic_path=traffic_paths.metadata(selected))
+        else:
+            result = app.config["TRAFFICGEN_CONTROLLER"].start(payload)
+        if lease_seconds is not None:
+            app.config['TRAFFICGEN_CONTROLLER'].bind_controller_lease(result['run']['run_id'], lease_seconds)
+            return app.config['TRAFFICGEN_CONTROLLER'].status()
+        return result
 
     def with_target_finding(summary, status):
         finding = target_finding((status.get("run") or {}).get("target_info"), __version__)
@@ -512,7 +533,9 @@ def create_app():
     @app.get("/ui/status")
     @admin_required
     def ui_status():
-        return jsonify(app.config["TRAFFICGEN_CONTROLLER"].status())
+        status = app.config["TRAFFICGEN_CONTROLLER"].status()
+        status['selected_path'] = maintenance.status(settings).get('selected') or {}
+        return jsonify(status)
 
     @app.get("/dem/data")
     @admin_required
@@ -714,7 +737,11 @@ def create_app():
     @app.get("/traffic-paths")
     @admin_required
     def traffic_paths_ui():
-        return render_template("traffic_paths.html", page="paths", paths=maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, []),
+        paths = maintenance.read_json(maintenance.ADMIN_DIR / traffic_paths.FILE, [])
+        saved = maintenance.read_json(settings.runtime_dir / network_setup.FILE, {})
+        drafts = [row for row in saved.values() if not any(path.get('id') == row.get('id') and all(
+            path.get(key, '') == row.get(key, '') for key in ('source', 'interface', 'gateway', 'target', 'mode', 'wan_id')) for path in paths)]
+        return render_template("traffic_paths.html", page="paths", paths=paths, drafts=drafts,
                                selected=maintenance.status(settings).get("selected") or {}, health=dict(path_health_cache), now=time.time(),
                                job=maintenance.status(settings).get("job") or {}, new_id=secrets.token_hex(16))
 
@@ -890,6 +917,7 @@ def create_app():
             "instance_name": settings.instance_name,
             # NetEm compares this with its own clock; components must agree on the time.
             "time": time.time(),
+            "role": "executor", "controller_ui": True, "controller_leases": True,
             "clock": clock_report(),
         }
 
@@ -947,7 +975,23 @@ def create_app():
     @app.post("/api/v1/workloads/stop")
     @bearer_required
     def api_workload_stop():
-        return jsonify(app.config["TRAFFICGEN_CONTROLLER"].stop())
+        raw = request.get_json(silent=True) or {}
+        if not isinstance(raw, dict) or set(raw) - {'run_id'} or (raw.get('run_id') is not None and not isinstance(raw['run_id'], str)):
+            return {'error': 'Invalid workload stop request.'}, 400
+        return jsonify(app.config["TRAFFICGEN_CONTROLLER"].stop(expected_run_id=raw.get('run_id')))
+
+    @app.post('/api/v1/controller/heartbeat')
+    @bearer_required
+    def controller_heartbeat():
+        raw = request.get_json(silent=True) or {}
+        if (not isinstance(raw, dict) or set(raw) - {'run_id', 'phase'}
+                or not isinstance(raw.get('run_id'), str) or not raw['run_id']
+                or not isinstance(raw.get('phase', ''), str) or len(raw.get('phase', '')) > 120):
+            return {'error': 'Invalid controller heartbeat.'}, 400
+        try:
+            return jsonify(app.config['TRAFFICGEN_CONTROLLER'].controller_heartbeat(raw['run_id'], raw.get('phase', '')))
+        except RuntimeError as exc:
+            return {'error': str(exc)}, 409
 
     @app.get("/api/v1/dem/summary")
     @bearer_required
@@ -1108,6 +1152,8 @@ def create_app():
         return jsonify({"runs": recent_runs(settings.database_path, 50)})
 
     atexit.register(app.config["TRAFFICGEN_CONTROLLER"].shutdown)
+    from .controller_ui import install as install_controller_ui
+    install_controller_ui(app)
     return app
 
 

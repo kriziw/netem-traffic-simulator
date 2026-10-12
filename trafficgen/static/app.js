@@ -1,4 +1,9 @@
 window.TrafficGen = (() => {
+  const fetch=(url,options)=>{
+    const prefix=window.TrafficGenControllerPrefix||'';
+    const mapped=typeof url==='string'&&url.startsWith('/')&&!url.startsWith(prefix+'/')?prefix+url:url;
+    return window.fetch ? window.fetch(mapped,options) : globalThis.fetch(mapped,options);
+  };
   let cleanups=[];
   let busy=false;
   const releaseChecks={simulator:null,target:null};
@@ -176,6 +181,12 @@ window.TrafficGen = (() => {
         const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value;};
         set("live-state",String(status.status||"idle").toUpperCase());
         set("live-run",status.run?.run_id||"No active run");
+        set("execution-site",status.run?.label||status.run?.profile||"Waiting for NetEm");
+        set("execution-phase",status.run?.controller_phase||"No active test phase");
+        const path=status.run?.traffic_path||status.selected_path||{};
+        set("execution-path",path.name||path.mode||"No selected workload path");
+        set("execution-target",status.run?.target||path.target||"—");
+        set("execution-stop-reason",status.run?.stop_reason||"—");
         set("live-users",status.users??0);
         set("live-score",dem.experience_score??"—");
         set("live-rating",dem.experience||"No data");

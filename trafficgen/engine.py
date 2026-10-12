@@ -425,6 +425,7 @@ class WorkloadController:
         self.run = None
         self.pattern_greenlet = None
         self.target_greenlet = None
+        self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
         self.stop_event = threading.Event()
         self.writer_thread = threading.Thread(
@@ -757,12 +758,46 @@ class WorkloadController:
                 self.runner.start(user_count=users, spawn_rate=candidate["spawn_rate"])
             return self.status()
 
-    def stop(self):
+    def bind_controller_lease(self, run_id, seconds):
         with self.lock:
+            if not self.run or self.run['run_id'] != run_id:
+                raise RuntimeError('The requested execution run changed.')
+            self.controller_lease = {'run_id': run_id, 'seconds': seconds, 'deadline': time.monotonic() + seconds}
+            self.run['controller_lease_seconds'] = seconds
+        gevent.spawn(self._watch_controller_lease, run_id)
+
+    def controller_heartbeat(self, run_id, phase=''):
+        with self.lock:
+            if not self.run or self.run['run_id'] != run_id or self.run.get('status') not in ('starting', 'running'):
+                raise RuntimeError('The executing workload no longer matches the controller test.')
+            if self.controller_lease and self.controller_lease['run_id'] == run_id:
+                self.controller_lease['deadline'] = time.monotonic() + self.controller_lease['seconds']
+            self.run['controller_phase'] = phase
+        return self.status()
+
+    def _watch_controller_lease(self, run_id):
+        while not self.stop_event.is_set():
+            with self.lock:
+                lease = self.controller_lease
+                if (not lease or lease['run_id'] != run_id or not self.run or self.run['run_id'] != run_id
+                        or self.run.get('status') not in ('starting', 'running')):
+                    return
+                expired = time.monotonic() >= lease['deadline']
+            if expired:
+                self.stop(expected_run_id=run_id, reason='NetEm controller heartbeat expired')
+                return
+            gevent.sleep(.5)
+
+    def stop(self, expected_run_id=None, reason=None):
+        with self.lock:
+            if expected_run_id and (not self.run or self.run['run_id'] != expected_run_id):
+                return self.status()
             if not self.run or self.run.get("status") in ("stopping", "stopped"):
                 return self.status()
             run_id = self.run["run_id"]
             self.run["status"] = "stopping"
+            if reason:
+                self.run['stop_reason'] = reason
             runner = self.runner
         if self.target_greenlet is not None:
             self.target_greenlet.kill(block=False)
