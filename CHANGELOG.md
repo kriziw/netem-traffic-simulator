@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.16.1...v0.17.0) (2026-10-13)
+
+
+### Features
+
+* paced bulk transfers at a target rate for calibration ([#52](https://github.com/kriziw/netem-traffic-simulator/issues/52)) ([5410ada](https://github.com/kriziw/netem-traffic-simulator/commit/5410ada41721e2651eaebbc44fcd885089d05fa4))
+
 ## [0.16.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.16.0...v0.16.1) (2026-10-13)
 
 
