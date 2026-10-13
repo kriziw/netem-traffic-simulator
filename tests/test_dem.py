@@ -2,7 +2,7 @@ from pathlib import Path
 import time
 
 from trafficgen.database import init_db, record_transaction
-from trafficgen.dem import dem_summary, latency_score, reliability_score, summarize_rows
+from trafficgen.dem import dem_summary, latency_score, reliability_score, summarize_rows, timeliness_score
 
 
 def test_dem_summary_tracks_endpoint_persona_and_application(tmp_path: Path):
@@ -76,6 +76,22 @@ def test_reliability_penalizes_failed_work_even_with_fast_responses():
     assert summarize_rows(rows)["experience_score"] == 55
     assert reliability_score(90) == 0
     assert reliability_score(99) == 100
+
+
+def test_late_but_delivered_work_degrades_the_score_gradually_instead_of_zeroing_it():
+    # A saturated link makes some DNS requests late, but users still get their answers: that is poor, not zero.
+    from trafficgen.experience_policy import default_policy
+    policy = default_policy()
+
+    def dns(late):
+        return [transaction("dns", 60)] * (100 - late) + [transaction("dns", 400)] * late
+
+    assert summarize_rows(dns(0), application="dns", policy=policy)["experience_score"] == 100
+    assert summarize_rows(dns(5), application="dns", policy=policy)["experience_score"] == 60
+    assert summarize_rows(dns(10), application="dns", policy=policy)["experience_score"] == 40
+    assert summarize_rows(dns(50), application="dns", policy=policy)["experience_score"] == 0
+    assert timeliness_score(99) == 100
+    assert timeliness_score(50) == 0
 
 
 def test_latency_thresholds_preserve_application_tolerances():

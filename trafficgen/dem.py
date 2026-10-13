@@ -52,6 +52,23 @@ def reliability_score(availability):
     return max(0.0, (availability - 90.0) * 55.0 / 5.0)
 
 
+def timeliness_score(share_pct):
+    """The share of work that met its target, scored on a slope rather than a cliff.
+
+    Late work that still succeeds is degradation: 99% on time is excellent, 95% fair and 90% poor, falling to
+    zero only when half the work is late. Failed work keeps the strict reliability scale above.
+    """
+    if share_pct >= 99:
+        return 100.0
+    knots = ((50.0, 0.0), (75.0, 15.0), (90.0, 40.0), (95.0, 60.0), (99.0, 100.0))
+    if share_pct <= knots[0][0]:
+        return 0.0
+    for (x0, y0), (x1, y1) in zip(knots, knots[1:]):
+        if share_pct <= x1:
+            return y0 + (share_pct - x0) * (y1 - y0) / (x1 - x0)
+    return 100.0
+
+
 def score_label(score):
     if score is None:
         return "No data"
@@ -76,7 +93,7 @@ def quality_components(rows, targets, window_seconds=60):
         on_time = sum(bool(row["success"] and row["response_time_ms"] <= targets["deadline_ms"]) for row in timed)
         evidence["on_time_pct"] = round(on_time * 100 / len(timed), 3)
         evidence["deadline_misses"] = sum(bool(row["success"] and row["response_time_ms"] > targets["deadline_ms"]) for row in timed)
-        components["deadline"] = reliability_score(on_time * 100 / len(timed))
+        components["deadline"] = timeliness_score(on_time * 100 / len(timed))
     bursts = [row for row in rows if row.get("packets_sent")]
     if bursts:
         known = [row for row in bursts if row.get("packets_lost") is not None]
@@ -87,7 +104,7 @@ def quality_components(rows, targets, window_seconds=60):
             lost = sum(row["packets_lost"] for row in known)
             evidence["udp_loss_pct"] = round(lost * 100 / sent, 3)
             met = sum(row["packets_lost"] * 100 / row["packets_sent"] <= targets["loss_max_pct"] for row in known)
-            components["udp_loss"] = reliability_score(met * 100 / len(known))
+            components["udp_loss"] = timeliness_score(met * 100 / len(known))
         if targets["jitter_max_ms"] > 0:
             known = [row for row in bursts if row.get("udp_jitter_ms") is not None]
             if len(known) != len(bursts):
@@ -95,7 +112,7 @@ def quality_components(rows, targets, window_seconds=60):
             if known:
                 evidence["udp_rtt_variation_p95_ms"] = round(percentile([row["udp_jitter_ms"] for row in known], .95), 3)
                 met = sum(row["udp_jitter_ms"] <= targets["jitter_max_ms"] for row in known)
-                components["udp_rtt_variation"] = reliability_score(met * 100 / len(known))
+                components["udp_rtt_variation"] = timeliness_score(met * 100 / len(known))
     for direction, field in (("down", "response_length"), ("up", "bytes_up")):
         sustained_minimum = targets.get(f"min_sustained_{direction}_mbps", 0)
         if sustained_minimum > 0:
@@ -117,7 +134,7 @@ def quality_components(rows, targets, window_seconds=60):
         if known:
             rates = [row[field] * 8 / (row["response_time_ms"] * 1000) if row["success"] else 0 for row in known]
             evidence[f"transfer_{direction}_p05_mbps"] = round(percentile(rates, .05), 3)
-            components[f"throughput_{direction}"] = reliability_score(sum(rate >= minimum for rate in rates) * 100 / len(rates))
+            components[f"throughput_{direction}"] = timeliness_score(sum(rate >= minimum for rate in rates) * 100 / len(rates))
     return components, evidence, missing
 
 
