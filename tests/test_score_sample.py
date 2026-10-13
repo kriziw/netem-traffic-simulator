@@ -36,17 +36,17 @@ def test_the_overall_score_is_graded_from_the_applications_that_have_enough_tran
     assert result["scoring_complete"] is True
 
 
-def test_a_failed_application_with_a_small_sample_still_drags_the_score_to_zero():
+def test_a_failed_application_with_a_small_sample_keeps_overall_evidence_incomplete():
     rows = [row("dns", ok=False) for _ in range(3)] + [row("web_saas") for _ in range(MIN_SCORED_TRANSACTIONS)]
     result = summarize_rows(rows)
-    assert result["experience_score"] == 0
-    assert result["limiting_application"] == "dns"
+    assert result["experience_score"] is None
+    assert "dns" in result["missing_measurements"]
     assert result["scoring_complete"] is False
 
 
 def test_slow_lookups_in_a_small_sample_are_not_graded_into_the_score():
     rows = [row("dns", ms=900.0) for _ in range(3)] + [row("web_saas") for _ in range(MIN_SCORED_TRANSACTIONS)]
-    assert summarize_rows(rows)["experience_score"] == 100
+    assert summarize_rows(rows)["experience_score"] is None
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from pathlib import Path
 DIAGNOSIS_COLUMNS = (
     ("cause", "TEXT"), ("wait_ms", "REAL"), ("transfer_ms", "REAL"), ("bytes_up", "INTEGER"),
     ("status_code", "INTEGER"), ("packets_sent", "INTEGER"), ("packets_lost", "INTEGER"), ("egress", "TEXT"),
-    ("udp_jitter_ms", "REAL"),
+    ("udp_jitter_ms", "REAL"), ("started_at", "REAL"), ("operation_id", "TEXT"), ("cancelled", "INTEGER"),
 )
 TRANSACTION_FIELDS = (
     "timestamp", "run_id", "endpoint_id", "persona", "application", "request_type", "name",
@@ -95,6 +95,14 @@ def init_db(path: Path):
                 run_id TEXT,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS run_contracts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                effective_at REAL NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_contract_run ON run_contracts(run_id, effective_at);
+            CREATE TABLE IF NOT EXISTS run_health (run_id TEXT PRIMARY KEY, dropped INTEGER NOT NULL DEFAULT 0);
             """
         )
         sample_columns = list(conn.execute("PRAGMA table_info(dem_samples)"))
@@ -112,6 +120,8 @@ def init_db(path: Path):
                 DROP TABLE old_dem_samples;
                 CREATE INDEX idx_dem_time ON dem_samples(timestamp);
             """)
+        if not any(row["name"] == "score_model" for row in conn.execute("PRAGMA table_info(dem_samples)")):
+            conn.execute("ALTER TABLE dem_samples ADD COLUMN score_model TEXT NOT NULL DEFAULT 'legacy-v1'")
         columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
@@ -194,8 +204,8 @@ def record_dem_sample(path: Path, sample: dict):
             """
             INSERT INTO dem_samples (
                 timestamp, run_id, users, requests_per_second, failures_per_second,
-                availability_pct, p50_ms, p95_ms, experience_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                availability_pct, p50_ms, p95_ms, experience_score, score_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sample["timestamp"],
@@ -207,6 +217,7 @@ def record_dem_sample(path: Path, sample: dict):
                 sample.get("p50_ms"),
                 sample.get("p95_ms"),
                 sample["experience_score"],
+                sample.get("score_model", "legacy-v1"),
             ),
         )
 
@@ -236,7 +247,7 @@ def query_dem_timeseries(path: Path, since: float, limit: int = 2000):
     with connect(path) as conn:
         rows = conn.execute(
             """
-            SELECT * FROM (SELECT timestamp, run_id, users, requests_per_second,
+            SELECT * FROM (SELECT timestamp, run_id, users, requests_per_second, score_model,
                    failures_per_second, availability_pct, p50_ms, p95_ms,
                    experience_score
             FROM dem_samples
@@ -249,9 +260,9 @@ def query_dem_timeseries(path: Path, since: float, limit: int = 2000):
     return [dict(row) for row in rows]
 
 
-def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000):
-    clauses = ["timestamp >= ?"]
-    values = [since]
+def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000, until=None):
+    clauses = ["timestamp >= ?", "timestamp < ?"]
+    values = [since, time.time() if until is None else until]
     if run_id:
         clauses.append("run_id = ?")
         values.append(run_id)
@@ -303,6 +314,8 @@ def prune_history(path: Path, retention_days: int = 7):
         conn.execute("DELETE FROM transactions WHERE timestamp < ?", (cutoff,))
         conn.execute("DELETE FROM dem_samples WHERE timestamp < ?", (cutoff,))
         conn.execute("DELETE FROM runs WHERE ended_at < ?", (cutoff,))
+        conn.execute("DELETE FROM run_contracts WHERE run_id NOT IN (SELECT run_id FROM runs)")
+        conn.execute("DELETE FROM run_health WHERE run_id NOT IN (SELECT run_id FROM runs)")
 
 
 def update_run(path: Path, run: dict):
@@ -312,3 +325,38 @@ def update_run(path: Path, run: dict):
                      (run["target_users"], run["spawn_rate"], run["activity"],
                       json.dumps(run["personas"]), json.dumps(run["applications"]),
                       run.get("media_mode", "strict"), run["status"], run["run_id"]))
+
+
+def save_contract(path, run, effective_at=None):
+    """Append immutable configuration epochs; never overwrite historical scoring inputs."""
+    payload = {key: run.get(key) for key in ("policy", "manifest", "score_model", "media_mode", "seed", "generation_mode")}
+    payload["dropped_transactions"] = run.get("dropped_transactions", 0)
+    with connect(path) as conn:
+        conn.execute("INSERT INTO run_contracts(run_id, effective_at, payload) VALUES (?, ?, ?)",
+                     (run["run_id"], time.time() if effective_at is None else effective_at, json.dumps(payload)))
+
+
+def record_data_loss(path, run_id, count):
+    if not run_id:
+        return
+    with connect(path) as conn:
+        conn.execute("INSERT INTO run_health(run_id, dropped) VALUES (?, ?) ON CONFLICT(run_id) DO UPDATE SET dropped=dropped+excluded.dropped",
+                     (run_id, count))
+
+
+def scoring_contract(path, run_id, since, until):
+    if not run_id:
+        return None, False
+    with connect(path) as conn:
+        rows = conn.execute("SELECT effective_at, payload FROM run_contracts WHERE run_id=? AND effective_at < ? ORDER BY effective_at, id",
+                            (run_id, until)).fetchall()
+    if not rows:
+        return None, False
+    epochs = [row for row in rows if row["effective_at"] > since]
+    # The first epoch is the run start, not an adjustment inside the requested window.
+    mixed = any(row is not rows[0] for row in epochs)
+    payload = json.loads(rows[-1]["payload"])
+    with connect(path) as conn:
+        health = conn.execute("SELECT dropped FROM run_health WHERE run_id=?", (run_id,)).fetchone()
+    payload["dropped_transactions"] = health["dropped"] if health else 0
+    return payload, mixed

@@ -5,9 +5,9 @@ import statistics
 import time
 from collections import defaultdict
 
-from .database import query_transactions
+from .database import query_transactions, scoring_contract
 from .profiles import APPLICATIONS
-from .experience_policy import default_policy, load_policy
+from .experience_policy import default_policy, load_policy, criticality_weight, SCORE_MODEL
 
 
 # An application needs this many transactions in the window before its own score is shown: with fewer, one late lookup
@@ -30,50 +30,25 @@ def percentile(values, pct):
     return clean[low] + (clean[high] - clean[low]) * fraction
 
 
-def latency_score(p95_ms, application=None):
-    if p95_ms is None:
+def target_credit(value, target):
+    """Elastic utility: a small target overrun causes a small loss of useful service."""
+    if value is None:
         return None
-    profile = APPLICATIONS.get(application or "", {})
-    good = float(profile.get("latency_good_ms", 400))
-    poor = float(profile.get("latency_poor_ms", 1800))
-    value = float(p95_ms)
-    if value <= good:
-        return 100.0
-    if value >= poor * 2:
-        return 0.0
-    if value <= poor:
-        return 100.0 - ((value - good) / max(1.0, poor - good)) * 65.0
-    return max(0.0, 35.0 - ((value - poor) / max(1.0, poor)) * 35.0)
+    return 100.0 if value <= target else 100.0 * target / value
 
 
-def reliability_score(availability):
-    """99% success is healthy; 95% is fair and 90% is critical.
+def latency_score(p95_ms, application=None, target_ms=None):
+    target = default_policy().get(application, {}).get("deadline_ms", 400) if target_ms is None else target_ms
+    return target_credit(p95_ms, target)
 
-    Raw availability is not an experience score: 5% failed work must not
-    contribute 95 points toward a green result.
-    """
-    if availability >= 99:
-        return 100.0
-    if availability >= 95:
-        return 55.0 + (availability - 95.0) * 45.0 / 4.0
-    return max(0.0, (availability - 90.0) * 55.0 / 5.0)
+
+def reliability_score(availability, target=100):
+    return min(100.0, max(0.0, availability * 100 / target)) if target else 100.0
 
 
 def timeliness_score(share_pct):
-    """The share of work that met its target, scored on a slope rather than a cliff.
-
-    Late work that still succeeds is degradation: 99% on time is excellent, 95% fair and 90% poor, falling to
-    zero only when half the work is late. Failed work keeps the strict reliability scale above.
-    """
-    if share_pct >= 99:
-        return 100.0
-    knots = ((50.0, 0.0), (75.0, 15.0), (90.0, 40.0), (95.0, 60.0), (99.0, 100.0))
-    if share_pct <= knots[0][0]:
-        return 0.0
-    for (x0, y0), (x1, y1) in zip(knots, knots[1:]):
-        if share_pct <= x1:
-            return y0 + (share_pct - x0) * (y1 - y0) / (x1 - x0)
-    return 100.0
+    # Compatibility helper: target compliance is a measured percentage, not an outage severity scale.
+    return max(0.0, min(100.0, share_pct))
 
 
 def score_label(score):
@@ -100,7 +75,11 @@ def quality_components(rows, targets, window_seconds=60):
         on_time = sum(bool(row["success"] and row["response_time_ms"] <= targets["deadline_ms"]) for row in timed)
         evidence["on_time_pct"] = round(on_time * 100 / len(timed), 3)
         evidence["deadline_misses"] = sum(bool(row["success"] and row["response_time_ms"] > targets["deadline_ms"]) for row in timed)
-        components["deadline"] = timeliness_score(on_time * 100 / len(timed))
+        delivered = [row for row in timed if row["success"]]
+        credits = [(100.0 if row["response_time_ms"] <= targets["deadline_ms"] else 0.0)
+                   if targets.get("hard_deadline") else target_credit(row["response_time_ms"], targets["deadline_ms"])
+                   for row in delivered]
+        components["deadline"] = statistics.mean(credits) if credits else 0.0
     bursts = [row for row in rows if row.get("packets_sent")]
     if bursts:
         known = [row for row in bursts if row.get("packets_lost") is not None]
@@ -111,15 +90,18 @@ def quality_components(rows, targets, window_seconds=60):
             lost = sum(row["packets_lost"] for row in known)
             evidence["udp_loss_pct"] = round(lost * 100 / sent, 3)
             met = sum(row["packets_lost"] * 100 / row["packets_sent"] <= targets["loss_max_pct"] for row in known)
-            components["udp_loss"] = timeliness_score(met * 100 / len(known))
+            evidence["loss_target_met_pct"] = met * 100 / len(known)
+            components["udp_loss"] = reliability_score(100 - lost * 100 / sent, 100 - targets["loss_max_pct"])
         if targets["jitter_max_ms"] > 0:
-            known = [row for row in bursts if row.get("udp_jitter_ms") is not None]
-            if len(known) != len(bursts):
+            delivered_bursts = [row for row in bursts if row.get("packets_lost", 0) < row["packets_sent"]]
+            known = [row for row in delivered_bursts if row.get("udp_jitter_ms") is not None]
+            if len(known) != len(delivered_bursts):
                 missing.append("udp_rtt_variation")
             if known:
                 evidence["udp_rtt_variation_p95_ms"] = round(percentile([row["udp_jitter_ms"] for row in known], .95), 3)
                 met = sum(row["udp_jitter_ms"] <= targets["jitter_max_ms"] for row in known)
-                components["udp_rtt_variation"] = timeliness_score(met * 100 / len(known))
+                evidence["jitter_target_met_pct"] = met * 100 / len(known)
+                components["udp_rtt_variation"] = target_credit(evidence["udp_rtt_variation_p95_ms"], targets["jitter_max_ms"])
     for direction, field in (("down", "response_length"), ("up", "bytes_up")):
         sustained_minimum = targets.get(f"min_sustained_{direction}_mbps", 0)
         if sustained_minimum > 0:
@@ -130,7 +112,7 @@ def quality_components(rows, targets, window_seconds=60):
                 rate = sum(row[field] for row in transfers if row["success"]) * 8 / (window_seconds * 1000000)
                 evidence[f"sustained_{direction}_mbps"] = round(rate, 3)
                 # A missed explicit minimum cannot label the application good.
-                components[f"sustained_{direction}"] = 100.0 if rate >= sustained_minimum else min(74.0, 100 * rate / sustained_minimum)
+                components[f"sustained_{direction}"] = 100.0 if rate >= sustained_minimum else 100 * rate / sustained_minimum
         minimum = targets[f"min_{direction}_mbps"]
         if minimum <= 0:
             continue
@@ -141,11 +123,11 @@ def quality_components(rows, targets, window_seconds=60):
         if known:
             rates = [row[field] * 8 / (row["response_time_ms"] * 1000) if row["success"] else 0 for row in known]
             evidence[f"transfer_{direction}_p05_mbps"] = round(percentile(rates, .05), 3)
-            components[f"throughput_{direction}"] = timeliness_score(sum(rate >= minimum for rate in rates) * 100 / len(rates))
+            components[f"throughput_{direction}"] = min(100.0, 100 * percentile(rates, .05) / minimum)
     return components, evidence, missing
 
 
-def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=None):
+def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=None, application_shares=None, scope="application"):
     policy = policy if policy is not None else default_policy()
     total = len(rows)
     override = minimum_transactions
@@ -164,7 +146,7 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
             "experience": "No data",
             "bytes": 0,
             "scoring_complete": False,
-            "limiting_application": None,
+            "limiting_application": None, "missing_measurements": ["transactions"], "critical": policy.get(application, {}).get("critical", False),
         }
     successes = [row for row in rows if row["success"]]
     latencies = [
@@ -175,44 +157,73 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
     availability = len(successes) * 100.0 / total
     p95 = percentile(latencies, 0.95)
     if application is not None:
-        targets = policy.get(application, {"critical": True, "deadline_ms": 400,
+        targets = dict(policy.get(application, {"critical": True, "deadline_ms": 400,
                             "jitter_max_ms": 0, "loss_max_pct": 0,
-                            "min_down_mbps": 0, "min_up_mbps": 0})
-        latency_component = latency_score(p95, application)
+                            "min_down_mbps": 0, "min_up_mbps": 0}))
+        if scope != "application":
+            # Site-wide sustained targets are not per-endpoint/persona/egress requirements.
+            targets.update(min_sustained_down_mbps=0, min_sustained_up_mbps=0)
         components, evidence, missing = quality_components(rows, targets, window_seconds)
-        components["reliability"] = reliability_score(availability)
-        if latency_component is not None:
-            components["response_time"] = latency_component
-        score = min(components.values())
-        extra = {"critical": targets["critical"], "score_components": components,
+        quality_score = min(components.values(), default=100)
+        loss_accounted = sum(not row["success"] and (row.get("packets_sent") or 0) > 0
+                             and row.get("packets_lost") == row["packets_sent"] for row in rows)
+        transport_pct = (len(successes) + loss_accounted) * 100 / total
+        components["reliability"] = reliability_score(transport_pct, targets.get("success_min_pct", 100))
+        score = quality_score * components["reliability"] / 100
+        compliance = {"success": availability >= targets.get("success_min_pct", 100),
+                      "deadline": evidence.get("deadline_misses", 0) == 0}
+        if "udp_loss_pct" in evidence:
+            compliance["loss"] = evidence["udp_loss_pct"] <= targets["loss_max_pct"]
+        if "udp_rtt_variation_p95_ms" in evidence:
+            compliance["jitter"] = evidence["udp_rtt_variation_p95_ms"] <= targets["jitter_max_ms"]
+        for direction in ("down", "up"):
+            for kind, metric, target in (("throughput", "transfer_" + direction + "_p05_mbps", "min_" + direction + "_mbps"),
+                                         ("sustained", "sustained_" + direction + "_mbps", "min_sustained_" + direction + "_mbps")):
+                if targets.get(target, 0):
+                    compliance[kind + "_" + direction] = evidence.get(metric) is not None and evidence[metric] >= targets[target]
+        extra = {"criticality": targets.get("criticality", "critical" if targets["critical"] else "standard"),
+                 "criticality_weight": criticality_weight(targets), "compliance": compliance,
+                 "target_violations": [key for key, met in compliance.items() if not met],
+                 "critical": targets["critical"], "score_components": components,
                  "quality": evidence, "experience_targets": targets, "missing_measurements": missing,
                  "scoring_complete": not missing and len(rows) >= minimum_transactions, "limiting_application": application}
     else:
         groups = defaultdict(list)
         for row in rows:
             groups[row.get("application") or "other"].append(row)
-        # Include failed-only applications. Healthy/bulk traffic must never
-        # average away an outage in a less frequently used business application.
-        summaries = {key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds,
-                                         minimum_transactions=override) for key, items in groups.items()}
-        critical = {key: item for key, item in summaries.items() if item["critical"]}
-        # An application with too few transactions shows a score only if it failed; see below. A healthy one is left out.
-        scored = {key: item for key, item in critical.items() if item["experience_score"] is not None}
-        limiting = min(scored, key=lambda key: scored[key]["experience_score"]) if scored else None
-        score = scored[limiting]["experience_score"] if limiting else None
-        extra = {"limiting_application": limiting, "critical_applications": sorted(critical),
-                 "scoring_complete": bool(critical) and all(item["scoring_complete"] for item in critical.values()),
-                 "missing_measurements": {key: item["missing_measurements"] for key, item in critical.items() if item["missing_measurements"]}}
+        shares = application_shares if application_shares is not None else {key: 1 for key in groups}
+        summaries = {key: summarize_rows(groups.get(key, []), application=key, policy=policy,
+                        window_seconds=window_seconds, minimum_transactions=override, scope=scope)
+                     for key, share in shares.items() if share > 0}
+        weights = {key: shares[key] * criticality_weight(policy.get(key, {})) for key in summaries}
+        total_weight = sum(weights.values())
+        weights = {key: value / total_weight for key, value in weights.items()} if total_weight else {}
+        complete = bool(summaries) and all(item["scoring_complete"] for item in summaries.values())
+        scored = {key: item for key, item in summaries.items() if item["experience_score"] is not None}
+        score = sum(weights[key] * item["experience_score"] for key, item in scored.items()) if len(scored) == len(summaries) and summaries else None
+        limiting = max(scored, key=lambda key: weights[key] * (100 - scored[key]["experience_score"])) if scored else None
+        contributions = {key: {"configured_share": shares[key], "weight": weights[key],
+                         "score": item["experience_score"], "criticality_weight": criticality_weight(policy.get(key, {})),
+                         "lost_points": weights[key] * (100 - item["experience_score"]) if item["experience_score"] is not None else None,
+                         "target_violations": item.get("target_violations", []), "requests": item["requests"],
+                         "scoring_complete": item["scoring_complete"]} for key, item in summaries.items()}
+        extra = {"limiting_application": limiting, "application_contributions": contributions,
+                 "critical_applications": sorted(key for key in summaries if policy.get(key, {}).get("critical")),
+                 "critical_alerts": [{"application": key, "violations": item.get("target_violations", []),
+                                      "scoring_complete": item["scoring_complete"]} for key, item in summaries.items()
+                                     if policy.get(key, {}).get("critical") and item.get("target_violations")],
+                 "scoring_complete": complete, "coverage_pct": 100 * sum(weights[key] for key in scored),
+                 "weight_source": "configured_workload" if application_shares is not None else "equal_application",
+                 "missing_measurements": {key: item.get("missing_measurements", []) or ["sample_count"]
+                                          for key, item in summaries.items() if not item["scoring_complete"]}}
     insufficient = total < minimum_transactions
     if application is not None and insufficient:
-        # Too few transactions to grade. Availability still shows failures: a failed application scores its availability,
-        # while a healthy one shows no score rather than a perfect one.
-        floor = reliability_score(availability)
-        score = floor if floor < 100 else None
+        score = None
     extra["scoring_complete"] = extra["scoring_complete"] and not insufficient
     extra["insufficient_sample"] = insufficient
     score = max(0.0, min(100.0, score)) if score is not None else None
     return {
+        "score_model": SCORE_MODEL,
         "requests": total,
         "successes": len(successes),
         "failures": total - len(successes),
@@ -220,6 +231,9 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         "p50_ms": round(percentile(latencies, 0.50), 3) if latencies else None,
         "p95_ms": round(p95, 3) if p95 is not None else None,
         "average_ms": round(statistics.mean(latencies), 3) if latencies else None,
+        "latency_basis": "successful_operation_completion; UDP operation latency is delivered-packet mean RTT",
+        "all_attempt_p95_ms": percentile([row.get("response_time_ms") for row in rows], .95),
+        "cancelled_requests": sum(bool(row.get("cancelled")) for row in rows),
         "experience_score": round(score, 2) if score is not None else None,
         "experience": "Too few transactions" if score is None and insufficient else (
             "Incomplete evidence" if score is not None and score >= 75 and not extra["scoring_complete"] else score_label(score)),
@@ -228,16 +242,31 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
     }
 
 
-def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="strict", diagnosis=True):
+def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="strict", diagnosis=True, since=None, until=None):
     # Imported here: diagnosis builds on this module's summaries.
     from .diagnosis import application_detail, diagnose
 
     now = time.time()
-    window_seconds = max(10, min(3600, int(window_seconds)))
-    since = now - window_seconds
-    rows = query_transactions(database_path, since, run_id=run_id, limit=50000)
-    policy = load_policy(database_path)
-    overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds)
+    end = now if until is None else float(until)
+    start = end - max(10, min(3600, float(window_seconds))) if since is None else float(since)
+    if not math.isfinite(start) or not math.isfinite(end) or start >= end or end > now + .1 or end - start > 86400:
+        raise ValueError("DEM requires a finite past interval, start < end, at most 24 hours.")
+    window_seconds = end - start
+    rows = query_transactions(database_path, start, run_id=run_id, limit=50000, until=end)
+    contract, mixed = scoring_contract(database_path, run_id, start, end)
+    policy = contract["policy"] if contract else load_policy(database_path)
+    shares = contract["manifest"]["application_shares"] if contract else None
+    overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds, application_shares=shares)
+    reasons = []
+    if len(rows) >= 50000:
+        reasons.append("row_limit")
+    if mixed:
+        reasons.append("configuration_changed_in_window")
+    if contract and contract.get("dropped_transactions", 0):
+        reasons.append("dropped_transactions")
+    if reasons:
+        overall["scoring_complete"] = False
+        overall["experience"] = "Incomplete evidence"
 
     by_app = defaultdict(list)
     by_persona = defaultdict(list)
@@ -251,25 +280,40 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         if endpoint_id != "unknown":
             endpoint_persona[endpoint_id] = row["persona"] or "unknown"
 
+    for app in shares or {}:
+        by_app[app]  # Preserve absent expected applications as unknown.
     app_summary = {
         key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds)
         for key, items in sorted(by_app.items())
     }
+    for key, item in app_summary.items():
+        item["class"] = APPLICATIONS.get(key, {}).get("class", "interactive")
+        item["configured_share"] = (shares or {}).get(key)
+        item["weight"] = (overall.get("application_contributions", {}).get(key) or {}).get("weight")
     if diagnosis:
         for key, items in by_app.items():
             app_summary[key].update(application_detail(key, items, policy))
     persona_summary = {
-        key: summarize_rows(items, policy=policy, window_seconds=window_seconds)
+        key: summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="subset",
+                            application_shares=(contract or {}).get("manifest", {}).get("persona_applications", {}).get(key))
         for key, items in sorted(by_persona.items())
     }
     endpoint_summary = {}
     for key, items in by_endpoint.items():
         if key == "unknown":
             continue
-        summary = summarize_rows(items, policy=policy, window_seconds=window_seconds)
+        summary = summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="subset",
+                                 application_shares=(contract or {}).get("manifest", {}).get("persona_applications", {}).get(endpoint_persona.get(key)))
         summary["endpoint_id"] = key
         summary["persona"] = endpoint_persona.get(key, "unknown")
         endpoint_summary[key] = summary
+
+    if reasons:
+        for group in (app_summary, persona_summary, endpoint_summary):
+            for item in group.values():
+                item["scoring_complete"] = False
+                item["evidence_issues"] = list(reasons)
+                item["experience"] = "Incomplete evidence"
 
     if rows:
         duration = float(window_seconds)
@@ -281,7 +325,9 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
 
     result = {
         "truncated": len(rows) >= 50000,
-        "timestamp": now,
+        "timestamp": now, "run_id": run_id, "since": start, "until": end,
+        "evidence_issues": reasons, "policy_source": "run_snapshot" if contract else "current_policy_regrade",
+        "score_model": SCORE_MODEL, "regraded": not bool(contract),
         "window_seconds": window_seconds,
         **overall,
         "requests_per_second": round(rps, 3),
@@ -292,5 +338,13 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     }
     if diagnosis:
         result["diagnosis"] = diagnose(rows, app_summary, media_mode, scoring_policy=policy, window_seconds=window_seconds)
+        for app, item in app_summary.items():
+            if item.get("target_violations") and item.get("scoring_complete"):
+                result["diagnosis"]["findings"].append({
+                    "id": "target_violation", "severity": "warn", "title": f"{APPLICATIONS.get(app, {}).get('label', app)} misses configured targets",
+                    "detail": ", ".join(item["target_violations"]) + f"; measured utility {item['experience_score']}/100.",
+                    "applications": [app], "affected": item["requests"], "by_egress": {"unknown": item["requests"]},
+                    "evidence": {"targets": item["experience_targets"], "quality": item["quality"],
+                                 "components": item["score_components"]}})
         result["interactive_p95_ms"] = result["diagnosis"]["interactive_p95_ms"]
     return result

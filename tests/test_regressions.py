@@ -62,7 +62,9 @@ def test_workload_lifecycle_and_atomic_adjustment(simulator):
         response = client.get("/api/v1/dem/experience", headers=headers)
         assert response.status_code == 200
         assert response.json["endpoint_experience"]["score"] is None
-        assert response.json["endpoint_experience"]["rating"] == "Too few transactions"
+        assert response.json["endpoint_experience"]["rating"] == "Incomplete evidence"
+        assert not response.json["scoring_complete"]
+        assert "configuration_changed_in_window" in response.json["evidence_issues"]
         assert response.json["endpoints"]
         assert client.post("/api/v1/workloads/stop", headers=headers).status_code == 200
         assert controller.status()["users"] == 0
@@ -156,7 +158,7 @@ def test_udp_dem_measures_delivery_and_rtt(echo):
         assert (events[0]["exception"] is None) is echo
         if echo:
             assert events[0]["response_time"] < 50
-            assert events[0]["response_length"] == 60
+            assert events[0]["response_length"] == 80
     finally:
         stop.set()
         sock.close()

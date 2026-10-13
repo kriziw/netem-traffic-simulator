@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 import time
 
@@ -45,10 +46,10 @@ def test_dem_summary_tracks_endpoint_persona_and_application(tmp_path: Path):
     assert "knowledge_worker" in summary["personas"]
     assert "ep-1" in summary["endpoints"]
     assert summary["endpoints"]["ep-1"]["persona"] == "knowledge_worker"
-    assert summary["experience_score"] == 0
-    assert summary["applications"]["web_saas"]["experience_score"] == 0
-    assert summary["personas"]["knowledge_worker"]["experience_score"] == 0
-    assert summary["endpoints"]["ep-1"]["experience_score"] == 0
+    assert summary["experience_score"] is None
+    assert summary["applications"]["web_saas"]["experience_score"] is None
+    assert summary["personas"]["knowledge_worker"]["experience_score"] is None
+    assert summary["endpoints"]["ep-1"]["experience_score"] is None
 
 
 def transaction(application, latency=100, success=True):
@@ -60,22 +61,23 @@ def test_business_application_cannot_be_hidden_by_healthy_bulk_traffic():
     rows = [transaction("file_sync")] * 1000 + [transaction("web_saas", 1184)] * 100
     score = summarize_rows(rows)
     assert score["availability_pct"] == 100
-    assert score["experience"] == "Critical"
+    assert 0 < score["experience_score"] < 100
+    assert score["critical_alerts"]
     assert score["limiting_application"] == "web_saas"
-    assert score["experience_score"] == summarize_rows(rows[-100:], "web_saas")["experience_score"]
+    assert score["experience_score"] > summarize_rows(rows[-100:], "web_saas")["experience_score"]
 
 
-def test_failed_only_application_sets_overall_score_to_zero():
+def test_insufficient_failed_only_application_does_not_claim_a_site_outage():
     rows = [transaction("web_saas")] * 1000 + [transaction("erp", success=False)]
-    assert summarize_rows(rows)["experience_score"] == 0
-    assert summarize_rows(rows)["experience"] == "Critical"
+    assert summarize_rows(rows)["experience_score"] is None
+    assert summarize_rows(rows)["scoring_complete"] is False
 
 
 def test_reliability_penalizes_failed_work_even_with_fast_responses():
     rows = [transaction("erp")] * 95 + [transaction("erp", success=False)] * 5
-    assert summarize_rows(rows)["experience_score"] == 55
-    assert reliability_score(90) == 0
-    assert reliability_score(99) == 100
+    assert summarize_rows(rows)["experience_score"] == pytest.approx(95 / 99 * 100, abs=.01)
+    assert reliability_score(90) == 90
+    assert reliability_score(99) == 99
 
 
 def test_late_but_delivered_work_degrades_the_score_gradually_instead_of_zeroing_it():
@@ -87,48 +89,48 @@ def test_late_but_delivered_work_degrades_the_score_gradually_instead_of_zeroing
         return [transaction("dns", 60)] * (100 - late) + [transaction("dns", 400)] * late
 
     assert summarize_rows(dns(0), application="dns", policy=policy)["experience_score"] == 100
-    assert summarize_rows(dns(5), application="dns", policy=policy)["experience_score"] == 60
-    assert summarize_rows(dns(10), application="dns", policy=policy)["experience_score"] == 40
-    assert summarize_rows(dns(50), application="dns", policy=policy)["experience_score"] == 0
-    assert timeliness_score(99) == 100
-    assert timeliness_score(50) == 0
+    assert summarize_rows(dns(5), application="dns", policy=policy)["experience_score"] == pytest.approx(96.5)
+    assert summarize_rows(dns(10), application="dns", policy=policy)["experience_score"] == pytest.approx(93)
+    assert summarize_rows(dns(50), application="dns", policy=policy)["experience_score"] == pytest.approx(65)
+    assert timeliness_score(99) == 99
+    assert timeliness_score(50) == 50
 
 
 def test_latency_thresholds_preserve_application_tolerances():
     assert latency_score(300, "web_saas") == 100
-    assert latency_score(1200, "web_saas") == 35
-    assert latency_score(2400, "web_saas") == 0
+    assert latency_score(1200, "web_saas") == 25
+    assert latency_score(2400, "web_saas") == 12.5
     assert latency_score(1200, "updates") == 100
     assert summarize_rows([transaction("web_saas")], minimum_transactions=1)["experience_score"] == 100
     assert summarize_rows([])["experience_score"] is None
 
 
-def test_deadline_breach_is_unusable_without_faking_a_transport_failure():
+def test_elastic_deadline_breach_keeps_partial_utility_without_faking_a_transport_failure():
     result = summarize_rows([transaction("erp", 450)], "erp")
     assert result["availability_pct"] == 100
     assert result["quality"]["deadline_misses"] == 1
     assert result["quality"]["on_time_pct"] == 0
-    assert result["score_components"]["deadline"] == 0
+    assert 0 < result["score_components"]["deadline"] < 100
 
 
-def test_noncritical_failures_do_not_limit_the_numeric_score():
-    from trafficgen.experience_policy import default_policy
-    policy = default_policy()
-    rows = [transaction("web_saas")] + [transaction("updates", success=False)] * 100
-    assert summarize_rows(rows, policy=policy, minimum_transactions=1)["experience_score"] == 100
-    policy["updates"]["critical"] = True
-    assert summarize_rows(rows, policy=policy)["experience_score"] == 0
-    assert summarize_rows([transaction("updates")])["experience_score"] is None
+def test_noncritical_failures_reduce_weighted_utility_without_zeroing_other_apps():
+    from trafficgen.experience_policy import validate_policy
+    rows = [transaction("web_saas")] * 20 + [transaction("updates", success=False)] * 20
+    low = summarize_rows(rows, policy=validate_policy({"updates": {"criticality": "standard"}}))
+    high = summarize_rows(rows, policy=validate_policy({"updates": {"criticality": "critical"}}))
+    assert low["experience_score"] == 80
+    assert high["experience_score"] == 50
+    assert high["critical_alerts"]
 
 
 def test_udp_loss_and_variation_have_independent_scores_and_coverage():
     row = dict(transaction("voice", 30), packets_sent=50, packets_lost=0, udp_jitter_ms=45)
     result = summarize_rows([row], "voice")
     assert result["score_components"]["udp_loss"] == 100
-    assert result["score_components"]["udp_rtt_variation"] == 0
+    assert result["score_components"]["udp_rtt_variation"] == pytest.approx(100 * 30 / 45)
     row["udp_jitter_ms"] = 5
     row["packets_lost"] = 3
-    assert summarize_rows([row], "voice")["score_components"]["udp_loss"] == 0
+    assert summarize_rows([row], "voice")["score_components"]["udp_loss"] == pytest.approx(100 * 94 / 98)
     row["packets_lost"] = 0
     row["udp_jitter_ms"] = None
     result = summarize_rows([row], "voice")
@@ -142,7 +144,7 @@ def test_transfer_speed_only_scores_real_transfers_with_explicit_targets():
     policy["updates"].update(critical=True, min_down_mbps=10)
     row = dict(transaction("updates", 1000), response_length=1024 * 1024)
     result = summarize_rows([row], "updates", policy)
-    assert result["score_components"]["throughput_down"] == 0
+    assert result["score_components"]["throughput_down"] == pytest.approx(83.88608)
     assert result["quality"]["transfer_down_p05_mbps"] == 8.389
     row["response_length"] = 1024
     result = summarize_rows([row], "updates", policy)

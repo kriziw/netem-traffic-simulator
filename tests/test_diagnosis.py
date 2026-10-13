@@ -114,7 +114,7 @@ def test_bulk_downloads_are_bandwidth_bound_per_egress():
                 response_length=size, egress="198.18.1.2") for _ in range(6)]
     rows += [row(application="web_saas") for _ in range(6)]
     details, result = run_diagnosis(rows)
-    assert details["updates"]["median_down_mbps"] == pytest.approx(size * 8 / 3900 / 1000, rel=1e-2)
+    assert details["updates"]["median_down_mbps"] == pytest.approx(size * 8 / 4000 / 1000, rel=1e-2)
     finding = next(item for item in result["findings"] if item["id"] == "bandwidth_bound")
     assert finding["direction"] == "download" and finding["applications"] == ["updates"]
     assert finding["by_egress"]["198.18.1.2"]["transfers"] == 6
@@ -206,7 +206,7 @@ def test_target_reports_source_version_and_answers_old_and_new_media_probes():
     client = target_app.test_client()
     response = client.get("/health", environ_base={"REMOTE_ADDR": "198.18.2.2"})
     assert response.headers[OBSERVED_SOURCE_HEADER] == "198.18.2.2"
-    assert {"media-echo", "observed-source"} <= set(response.json["capabilities"]) and response.json["version"]
+    assert "observed-source" in response.json["capabilities"] and response.json["version"]
 
     stop = threading.Event()
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -215,6 +215,7 @@ def test_target_reports_source_version_and_answers_old_and_new_media_probes():
     probe.close()
     worker = gevent.spawn(udp_sink, "127.0.0.1", port, stop)
     gevent.sleep(0.02)
+    assert client.get("/health").json["media_echo"]["running"]
     client_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     client_sock.settimeout(2)
     try:
@@ -248,7 +249,7 @@ def lossy_echo(port_holder, drop, stop):
 @pytest.mark.parametrize("mode, drop, fails", [
     ("strict", {3}, True), ("realistic", {3}, False), ("realistic", {3, 9}, True), ("realistic", set(range(50)), True),
 ])
-def test_media_mode_decides_how_much_loss_fails_a_burst(mode, drop, fails):
+def test_partial_media_delivery_is_transport_success_with_loss_evidence(mode, drop, fails):
     holder, stop = [], threading.Event()
     worker = gevent.spawn(lossy_echo, holder, drop, stop)
     while not holder:
@@ -266,7 +267,9 @@ def test_media_mode_decides_how_much_loss_fails_a_burst(mode, drop, fails):
         stop.set()
         worker.join(timeout=2)
     event = events[0]
-    assert (event["exception"] is not None) is fails
+    assert (event["exception"] is not None) is (len(drop) == 50)
+    assert event["context"]["bytes_up"] == 50 * 160
+    assert event["response_length"] == (50 - len(drop)) * 16
     assert event["context"]["packets_sent"] == 50 and event["context"]["packets_lost"] == len(drop)
     assert event["context"]["egress"] == (None if len(drop) == 50 else "198.18.2.2")
     if len(drop) == 50:

@@ -159,12 +159,11 @@ def _payload_ms(row):
 
 
 def _rate_mbps(row):
-    if _is_upload(row):
-        return row["bytes_up"] * 8 / (row["wait_ms"] * 1000) if row["wait_ms"] > 0 else None
-    size = row.get("response_length") or 0
-    if size >= BULK_BYTES and row["transfer_ms"] > 0:
-        return size * 8 / (row["transfer_ms"] * 1000)
-    return None
+    # Per-operation goodput uses the same full duration as scoring. Timing split
+    # remains available separately to investigate first-byte and body-transfer delays.
+    duration = row.get("response_time_ms") or 0
+    size = (row.get("bytes_up") if _is_upload(row) else row.get("response_length")) or 0
+    return size * 8 / (duration * 1000) if size >= BULK_BYTES and duration > 0 else None
 
 
 def _round(value, digits=1):
@@ -243,7 +242,7 @@ def egress_breakdown(rows, scoring_policy=None, window_seconds=60):
         groups[row.get("egress") or UNKNOWN_EGRESS].append(row)
     result = {}
     for address, items in sorted(groups.items()):
-        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds)
+        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds, scope="subset")
         apps = defaultdict(lambda: [0, 0, []])
         for row in items:
             counts = apps[row.get("application") or "other"]
@@ -373,13 +372,14 @@ def _timing_findings(rows, applications):
     for app, items in by_app.items():
         detail = applications.get(app) or {}
         profile = APPLICATIONS.get(app, {})
+        target_ms = (applications.get(app, {}).get("experience_targets") or {}).get("deadline_ms", profile.get("latency_good_ms", 400))
         if detail.get("class") != "bulk" or len(items) < MIN_SAMPLES:
             continue
         p95 = percentile([row["response_time_ms"] for row in items], 0.95)
-        if p95 > profile.get("latency_good_ms", 400) and (detail.get("transfer_share") or 0) >= BANDWIDTH_SHARE:
+        if p95 > target_ms and (detail.get("transfer_share") or 0) >= BANDWIDTH_SHARE:
             uploads = sum(_payload_ms(row) for row in items if _is_upload(row))
             direction = "upload" if uploads * 2 > sum(_payload_ms(row) for row in items) else "download"
-            limited[direction].append((app, p95, profile.get("latency_poor_ms", 1800), items))
+            limited[direction].append((app, p95, 2 * target_ms, items))
     for direction, entries in limited.items():
         items = [row for entry in entries for row in entry[3]]
         rates = [rate for row in items if (rate := _rate_mbps(row)) is not None]
@@ -407,11 +407,12 @@ def _timing_findings(rows, applications):
     waiting = []
     for app, items in by_app.items():
         profile = APPLICATIONS.get(app, {})
+        target_ms = (applications.get(app, {}).get("experience_targets") or {}).get("deadline_ms", profile.get("latency_good_ms", 400))
         if _class(app) != "interactive" or len(items) < MIN_SAMPLES:
             continue
         p95_wait = percentile([row["wait_ms"] for row in items], 0.95)
-        if p95_wait > profile.get("latency_good_ms", 400):
-            waiting.append((app, p95_wait, profile.get("latency_poor_ms", 1800), items))
+        if p95_wait > target_ms:
+            waiting.append((app, p95_wait, 2 * target_ms, items))
     if waiting:
         items = [row for entry in waiting for row in entry[3]]
         worst = max(waiting, key=lambda entry: entry[1])
