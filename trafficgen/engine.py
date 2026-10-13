@@ -114,6 +114,12 @@ PACED_OBJECT_KB = 4096
 PACED_OBJECT_SIZES_KB = (1024, 2048, 3072, 4096)
 
 
+def paced_sparse_user(runtime_config):
+    """Whether this paced user also sends OT-style UDP bursts, so loss and jitter under the paced load are measured."""
+    share = runtime_config.get("sparse_share") or 0.0
+    return bool(runtime_config.get("paced_mbps_per_user")) and random.random() < share
+
+
 class CorporateUser(HttpUser):
     abstract = True
     runtime_config = {}
@@ -135,6 +141,7 @@ class CorporateUser(HttpUser):
             bind_http(self.client, source)
         self.client.request = self._bounded_request(self.client.request)
         self.mix_revision = cfg.get("mix_revision", 0)
+        self.sparse_user = paced_sparse_user(cfg)
 
     @staticmethod
     def _bounded_request(request):
@@ -152,7 +159,7 @@ class CorporateUser(HttpUser):
 
     def wait_time(self):
         if self.runtime_config.get("paced_mbps_per_user"):
-            return 0
+            return 0.2 if getattr(self, "sparse_user", False) else 0
         activity = self.runtime_config.get("activity", "normal")
         bounds = ACTIVITY.get(activity, ACTIVITY["normal"])
         return random.uniform(bounds["wait_min"], bounds["wait_max"])
@@ -185,7 +192,10 @@ class CorporateUser(HttpUser):
     @task
     def corporate_action(self):
         if self.runtime_config.get("paced_mbps_per_user"):
-            self._paced_bulk()
+            if getattr(self, "sparse_user", False):
+                self._app_ot_telemetry()
+            else:
+                self._paced_bulk()
             return
         revision = self.runtime_config.get("mix_revision", 0)
         if revision != self.mix_revision:
@@ -565,7 +575,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -589,6 +599,10 @@ class WorkloadController:
         if paced_mbps is not None:
             # Calibration: every user paces bounded downloads to this aggregate rate; the persona mix is not used.
             paced_mbps = bounded_number(paced_mbps, "paced_mbps", 0.1, 1000)
+        sparse_share = raw.get("sparse_share")
+        if sparse_share is not None and paced_mbps is None:
+            raise ValueError("sparse_share needs paced_mbps.")
+        sparse_share = 0.0 if sparse_share is None else bounded_number(sparse_share, "sparse_share", 0, 0.5)
         target = str(raw.get("target") or self.settings.default_target).rstrip("/")
         parsed = urlsplit(target)
         try:
@@ -630,6 +644,7 @@ class WorkloadController:
             "label": (label or "").strip() or None,
             "paced_mbps": paced_mbps,
             "paced_mbps_per_user": round(paced_mbps / users, 6) if paced_mbps else None,
+            "sparse_share": sparse_share,
             "udp_port": self.settings.target_udp_port,
             "stage": None,
             "mix_revision": 0,
