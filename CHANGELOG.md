@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.3...v0.19.4) (2026-10-13)
+
+
+### Bug Fixes
+
+* grade an application from five transactions, and the overall score from any graded application ([#68](https://github.com/kriziw/netem-traffic-simulator/issues/68)) ([c22c356](https://github.com/kriziw/netem-traffic-simulator/commit/c22c356e286032693f5a0b54939b5d29c78e4b05))
+
 ## [0.19.3](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.2...v0.19.3) (2026-10-13)
 
 
