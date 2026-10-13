@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.3](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.2...v0.19.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* score small samples only from enough transactions, and keep a failure visible in them ([#66](https://github.com/kriziw/netem-traffic-simulator/issues/66)) ([dd152dc](https://github.com/kriziw/netem-traffic-simulator/commit/dd152dcdba6a7802b788058b123ce4b727d38cb4))
+
 ## [0.19.2](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.1...v0.19.2) (2026-10-13)
 
 
