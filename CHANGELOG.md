@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.0...v0.19.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* share the target rate among the users that download, and report simulator CPU and paced timings ([#62](https://github.com/kriziw/netem-traffic-simulator/issues/62)) ([2f09170](https://github.com/kriziw/netem-traffic-simulator/commit/2f091704dc2c6d93cf66b4483cc79f48217dbd00))
+
 ## [0.19.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.18.0...v0.19.0) (2026-10-13)
 
 
