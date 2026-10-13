@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.17.0...v0.17.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* paced users start at random offsets with random sizes so they do not run in lockstep ([#54](https://github.com/kriziw/netem-traffic-simulator/issues/54)) ([c56512a](https://github.com/kriziw/netem-traffic-simulator/commit/c56512a964ad3fd46ec9aace6f592a89ee9a610a))
+
 ## [0.17.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.16.1...v0.17.0) (2026-10-13)
 
 
