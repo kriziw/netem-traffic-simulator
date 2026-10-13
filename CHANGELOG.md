@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.2](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.1...v0.19.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* choose the sparse users exactly, and count paced downloads in flight live ([#64](https://github.com/kriziw/netem-traffic-simulator/issues/64)) ([57fcb62](https://github.com/kriziw/netem-traffic-simulator/commit/57fcb6212affb55901ed4cf44b71a02be2071b10))
+
 ## [0.19.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.0...v0.19.1) (2026-10-13)
 
 
