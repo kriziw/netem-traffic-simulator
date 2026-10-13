@@ -10,7 +10,10 @@ from .profiles import APPLICATIONS
 from .experience_policy import default_policy, load_policy
 
 
-# Fewer transactions than this in the window and one lookup or burst decides the score, so no score is shown.
+# An application needs this many transactions in the window before its own score is shown: with fewer, one late lookup
+# or burst decides it. Its failures still count (see summarize_rows).
+MIN_APP_TRANSACTIONS = 5
+# The overall score needs this many transactions across the window to be complete; below it the result says so.
 MIN_SCORED_TRANSACTIONS = 20
 
 
@@ -142,9 +145,12 @@ def quality_components(rows, targets, window_seconds=60):
     return components, evidence, missing
 
 
-def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=MIN_SCORED_TRANSACTIONS):
+def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=None):
     policy = policy if policy is not None else default_policy()
     total = len(rows)
+    override = minimum_transactions
+    if minimum_transactions is None:
+        minimum_transactions = MIN_APP_TRANSACTIONS if application is not None else MIN_SCORED_TRANSACTIONS
     if not total:
         return {
             "requests": 0,
@@ -188,7 +194,7 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         # Include failed-only applications. Healthy/bulk traffic must never
         # average away an outage in a less frequently used business application.
         summaries = {key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds,
-                                         minimum_transactions=minimum_transactions) for key, items in groups.items()}
+                                         minimum_transactions=override) for key, items in groups.items()}
         critical = {key: item for key, item in summaries.items() if item["critical"]}
         # An application with too few transactions shows a score only if it failed; see below. A healthy one is left out.
         scored = {key: item for key, item in critical.items() if item["experience_score"] is not None}
