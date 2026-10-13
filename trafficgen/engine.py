@@ -108,8 +108,10 @@ def validated_media_mode(value) -> str:
     return value
 
 
-# The largest bounded object the controlled target serves on /files/download.
+# The largest bounded object the controlled target serves on /files/download. Paced users pick sizes from the
+# list, so their transfers do not run in lockstep.
 PACED_OBJECT_KB = 4096
+PACED_OBJECT_SIZES_KB = (1024, 2048, 3072, 4096)
 
 
 class CorporateUser(HttpUser):
@@ -165,12 +167,17 @@ class CorporateUser(HttpUser):
 
     def _paced_bulk(self):
         """Calibration traffic: bounded objects back to back, each user paced to its share of the target rate.
-        A link or host that cannot keep up takes longer, so the achieved rate falls below the target."""
+        Users start at random offsets and fetch random sizes, so their bursts do not line up. A link or host that
+        cannot keep up takes longer, so the achieved rate falls below the target."""
         rate_bps = self.runtime_config["paced_mbps_per_user"] * 1_000_000
+        if not getattr(self, "paced_offset_taken", False):
+            self.paced_offset_taken = True
+            gevent.sleep(random.uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
+        kb = random.choice(PACED_OBJECT_SIZES_KB)
         started = time.monotonic()
-        self.client.get(f"/files/download?kb={PACED_OBJECT_KB}", name="paced/bulk-download",
+        self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download",
                         context=self._context("guest_internet"))
-        due = PACED_OBJECT_KB * 1024 * 8 / rate_bps
+        due = kb * 1024 * 8 / rate_bps
         remaining = due - (time.monotonic() - started)
         if remaining > 0:
             gevent.sleep(remaining)

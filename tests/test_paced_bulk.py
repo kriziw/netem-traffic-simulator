@@ -16,6 +16,7 @@ def paced_user(rate_mbps_per_user):
     user.endpoint_id = "ep-test"
     user.persona = "office"
     user.client = Mock()
+    user.paced_offset_taken = True
     return user
 
 
@@ -48,12 +49,33 @@ def test_paced_users_do_not_wait_between_transfers_and_skip_the_persona_mix():
 
 def test_a_fast_transfer_is_paced_to_the_users_share_of_the_rate():
     user = paced_user(4.0)
-    with patch.object(engine.gevent, "sleep") as sleep:
+    with patch.object(engine.gevent, "sleep") as sleep, patch.object(engine.random, "choice", return_value=4096):
         user._paced_bulk()
     # 4096 KiB at 4 Mbit/s takes about 8.39 s; the transfer itself took almost no time.
     assert sleep.call_count == 1
     assert sleep.call_args.args[0] == pytest.approx(4096 * 1024 * 8 / 4_000_000, abs=0.05)
     assert user.client.get.call_args.args[0] == "/files/download?kb=4096"
+
+
+def test_each_user_starts_at_a_random_offset_once():
+    user = paced_user(4.0)
+    user.paced_offset_taken = False
+    with patch.object(engine.gevent, "sleep") as sleep, patch.object(engine.random, "uniform", return_value=3.0),          patch.object(engine.random, "choice", return_value=1024):
+        user._paced_bulk()
+        user._paced_bulk()
+    offsets = [call.args[0] for call in sleep.call_args_list if call.args[0] == 3.0]
+    assert offsets == [3.0]
+    assert user.paced_offset_taken is True
+
+
+def test_transfers_use_random_sizes_so_users_do_not_run_in_lockstep():
+    user = paced_user(4.0)
+    with patch.object(engine.gevent, "sleep"):
+        for _ in range(40):
+            user._paced_bulk()
+    urls = {call.args[0] for call in user.client.get.call_args_list}
+    assert len(urls) > 1
+    assert urls <= {f"/files/download?kb={kb}" for kb in engine.PACED_OBJECT_SIZES_KB}
 
 
 def test_a_slow_link_takes_longer_and_is_not_padded():
