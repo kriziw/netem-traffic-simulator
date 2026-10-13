@@ -923,7 +923,7 @@ def create_app():
 
     @app.get("/api/v1/health")
     def api_health():
-        return {
+        payload = {
             "service": "netem-traffic-simulator",
             "version": __version__,
             "api_version": "v1",
@@ -934,6 +934,12 @@ def create_app():
             "role": "executor", "controller_settings_api": True, "controller_leases": True,
             "clock": clock_report(),
         }
+        # Cheap, in-memory figures for the NetEm calibration log: no DEM work runs on this request.
+        controller = app.config.get("TRAFFICGEN_CONTROLLER")
+        if controller is not None:
+            payload["counters"] = controller.telemetry()
+            payload.update(controller.loop_telemetry())
+        return payload
 
     @app.get("/api/v1/status")
     @bearer_required
