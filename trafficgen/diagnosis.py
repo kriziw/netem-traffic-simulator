@@ -186,7 +186,15 @@ def _timed(rows):
             and row.get("transfer_ms") is not None and row.get("response_time_ms") is not None]
 
 
-def application_detail(app, rows):
+def _tolerance(mode, item, app, scoring_policy):
+    """The loss a burst may carry before it fails in a mode. Realistic mode follows the experience policy's loss target,
+    so an impact and the score use one threshold; strict mode fails any lost packet."""
+    if scoring_policy and app in scoring_policy and mode != "strict":
+        return float(scoring_policy[app].get("loss_max_pct", 0.0))
+    return item["tolerance_pct"].get(app, 0.0)
+
+
+def application_detail(app, rows, scoring_policy=None):
     """Per-application causes, timing split, throughput and media loss."""
     failures = Counter(row_cause(row) for row in rows if not row["success"])
     timed = _timed(rows)
@@ -221,7 +229,7 @@ def application_detail(app, rows):
             "bursts_with_loss": sum(1 for row in bursts if 0 < (row.get("packets_lost") or 0) < row["packets_sent"]),
             "no_reply": sum(1 for row in bursts if (row.get("packets_lost") or 0) >= row["packets_sent"]),
             "fail_by_mode": {
-                mode: sum(1 for row in bursts if _media_fails(row, item["tolerance_pct"].get(app, 0.0)))
+                mode: sum(1 for row in bursts if _media_fails(row, _tolerance(mode, item, app, scoring_policy)))
                 for mode, item in MEDIA_MODES.items()
             },
         }

@@ -99,7 +99,7 @@ def test_latency_thresholds_preserve_application_tolerances():
     assert latency_score(1200, "web_saas") == 35
     assert latency_score(2400, "web_saas") == 0
     assert latency_score(1200, "updates") == 100
-    assert summarize_rows([transaction("web_saas")])["experience_score"] == 100
+    assert summarize_rows([transaction("web_saas")], minimum_transactions=1)["experience_score"] == 100
     assert summarize_rows([])["experience_score"] is None
 
 
@@ -115,7 +115,7 @@ def test_noncritical_failures_do_not_limit_the_numeric_score():
     from trafficgen.experience_policy import default_policy
     policy = default_policy()
     rows = [transaction("web_saas")] + [transaction("updates", success=False)] * 100
-    assert summarize_rows(rows, policy=policy)["experience_score"] == 100
+    assert summarize_rows(rows, policy=policy, minimum_transactions=1)["experience_score"] == 100
     policy["updates"]["critical"] = True
     assert summarize_rows(rows, policy=policy)["experience_score"] == 0
     assert summarize_rows([transaction("updates")])["experience_score"] is None
@@ -168,7 +168,7 @@ def test_sustained_goodput_includes_the_entire_window():
     policy = default_policy()
     policy["updates"].update(critical=True, min_sustained_down_mbps=1)
     rows = [dict(transaction("updates", 100), response_length=1024 * 1024)] * 4
-    result = summarize_rows(rows, "updates", policy, window_seconds=60)
+    result = summarize_rows(rows, "updates", policy, window_seconds=60, minimum_transactions=1)
     assert result["quality"]["sustained_down_mbps"] == .559
     assert result["experience_score"] < 75
     assert summarize_rows(rows, "updates", policy, window_seconds=10)["score_components"]["sustained_down"] == 100

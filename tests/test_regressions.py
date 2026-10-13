@@ -61,7 +61,8 @@ def test_workload_lifecycle_and_atomic_adjustment(simulator):
         assert recent_runs(controller.settings.database_path)[0]["target_users"] == 2
         response = client.get("/api/v1/dem/experience", headers=headers)
         assert response.status_code == 200
-        assert response.json["endpoint_experience"]["score"] is not None
+        assert response.json["endpoint_experience"]["score"] is None
+        assert response.json["endpoint_experience"]["rating"] == "Too few transactions"
         assert response.json["endpoints"]
         assert client.post("/api/v1/workloads/stop", headers=headers).status_code == 200
         assert controller.status()["users"] == 0
