@@ -26,6 +26,11 @@ def test_a_target_rate_is_shared_across_the_users(simulator):
     assert run["paced_mbps_per_user"] == 4.0
 
 
+def test_the_rate_is_shared_only_by_the_users_that_download(simulator):
+    run = controller(simulator)._validate_start({"users": 50, "paced_mbps": 200, "sparse_share": 0.2})
+    assert run["paced_mbps_per_user"] == round(200 / (50 * 0.8), 6)
+
+
 def test_runs_without_a_target_rate_keep_the_persona_mix(simulator):
     run = controller(simulator)._validate_start({"users": 50})
     assert run["paced_mbps"] is None
