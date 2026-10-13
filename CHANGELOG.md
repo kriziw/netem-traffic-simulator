@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.16.0...v0.16.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* late but delivered work lowers the experience score gradually ([#50](https://github.com/kriziw/netem-traffic-simulator/issues/50)) ([804aee7](https://github.com/kriziw/netem-traffic-simulator/commit/804aee7de9f2aafda47803999d649cc09c4879ca))
+
 ## [0.16.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.15.0...v0.16.0) (2026-10-12)
 
 
