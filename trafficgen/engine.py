@@ -119,6 +119,8 @@ def validated_media_mode(value) -> str:
 # list, so their transfers do not run in lockstep.
 # Paced bulk requests begun, cumulative. NetEm subtracts the completed ones to count what is still in flight.
 PACED_STARTED = {"requests": 0}
+# Paced downloads in progress right now, in this process. Decremented however a download ends, so it stays true.
+PACED_IN_FLIGHT = {"requests": 0}
 # The loop monitor wakes this often: a wake-up later than this is time the event loop was held.
 LOOP_INTERVAL_S = 0.2
 # How much recent history the health endpoint returns for the calibration log.
@@ -127,10 +129,17 @@ PACED_OBJECT_KB = 4096
 PACED_OBJECT_SIZES_KB = (1024, 2048, 3072, 4096)
 
 
-def paced_sparse_user(runtime_config):
-    """Whether this paced user also sends OT-style UDP bursts, so loss and jitter under the paced load are measured."""
-    share = runtime_config.get("sparse_share") or 0.0
-    return bool(runtime_config.get("paced_mbps_per_user")) and random.random() < share
+def claim_sparse_slot(runtime_config):
+    """Whether this paced user is one of the run's sparse users, which also send OT-style UDP bursts so loss and jitter
+    under the paced load are measured. The first users to start claim exactly the run's sparse slots, so the users that
+    download, and the rate they share, are known rather than a random draw."""
+    if not runtime_config.get("paced_mbps_per_user"):
+        return False
+    claimed = runtime_config.get("sparse_claimed", 0)
+    if claimed >= runtime_config.get("sparse_slots", 0):
+        return False
+    runtime_config["sparse_claimed"] = claimed + 1
+    return True
 
 
 class CorporateUser(HttpUser):
@@ -154,7 +163,7 @@ class CorporateUser(HttpUser):
             bind_http(self.client, source)
         self.client.request = self._bounded_request(self.client.request)
         self.mix_revision = cfg.get("mix_revision", 0)
-        self.sparse_user = paced_sparse_user(cfg)
+        self.sparse_user = claim_sparse_slot(cfg)
 
     @staticmethod
     def _bounded_request(request):
@@ -195,9 +204,14 @@ class CorporateUser(HttpUser):
             gevent.sleep(random.uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
         kb = random.choice(PACED_OBJECT_SIZES_KB)
         PACED_STARTED["requests"] += 1
+        PACED_IN_FLIGHT["requests"] += 1
         started = time.monotonic()
-        self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download",
-                        context=self._context("guest_internet"))
+        try:
+            self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download",
+                            context=self._context("guest_internet"))
+        finally:
+            # A download cut short when the run stops still leaves the in-flight count, so the count stays true.
+            PACED_IN_FLIGHT["requests"] -= 1
         due = kb * 1024 * 8 / rate_bps
         remaining = due - (time.monotonic() - started)
         if remaining > 0:
@@ -618,6 +632,7 @@ class WorkloadController:
         return {"requests": self.counters["requests"], "failures": self.counters["failures"],
                 "bytes": self.counters["bytes"], "dropped_transactions": self.dropped_transactions,
                 "paced_started": PACED_STARTED["requests"], "paced_completed": self.counters["paced_completed"],
+                "paced_in_flight": PACED_IN_FLIGHT["requests"],
                 "paced_wait_ms": round(self.counters["paced_wait_ms"], 1),
                 "paced_transfer_ms": round(self.counters["paced_transfer_ms"], 1),
                 # Process CPU seconds, all threads: a share of one core at 100 per cent.
@@ -758,8 +773,10 @@ class WorkloadController:
             # Describes what the run represents, e.g. the site NetEm modelled it on.
             "label": (label or "").strip() or None,
             "paced_mbps": paced_mbps,
-            # Only the users that download share the rate: a sparse user sends UDP bursts instead.
-            "paced_mbps_per_user": round(paced_mbps / (users * (1 - sparse_share)), 6) if paced_mbps else None,
+            # Exactly this many users send UDP bursts instead of downloads; only the others share the rate.
+            "sparse_slots": round(users * sparse_share),
+            "sparse_claimed": 0,
+            "paced_mbps_per_user": round(paced_mbps / (users - round(users * sparse_share)), 6) if paced_mbps else None,
             "sparse_share": sparse_share,
             "udp_port": self.settings.target_udp_port,
             "stage": None,

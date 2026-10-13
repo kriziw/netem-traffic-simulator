@@ -37,6 +37,24 @@ def test_the_health_reports_cpu_and_paced_timings(simulator):
     assert response["counters"]["cpu_s"] >= 0
 
 
+def test_the_in_flight_paced_count_drops_when_a_download_is_cut_short(simulator):
+    from unittest.mock import Mock
+
+    import pytest
+
+    before = engine.PACED_IN_FLIGHT["requests"]
+    user = object.__new__(engine.CorporateUser)
+    user.runtime_config = {"run_id": "run-test", "paced_mbps_per_user": 4.0}
+    user.endpoint_id = "ep-test"
+    user.persona = "office"
+    user.client = Mock()
+    user.client.get.side_effect = RuntimeError("cut short when the run stopped")
+    user.paced_offset_taken = True
+    with pytest.raises(RuntimeError):
+        user._paced_bulk()
+    assert engine.PACED_IN_FLIGHT["requests"] == before
+
+
 def test_loop_monitor_records_how_late_the_loop_woke(simulator):
     controller = simulator.config["TRAFFICGEN_CONTROLLER"]
     gevent.sleep(0.6)
