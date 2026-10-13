@@ -10,6 +10,10 @@ from .profiles import APPLICATIONS
 from .experience_policy import default_policy, load_policy
 
 
+# Fewer transactions than this in the window and one lookup or burst decides the score, so no score is shown.
+MIN_SCORED_TRANSACTIONS = 20
+
+
 def percentile(values, pct):
     clean = sorted(float(value) for value in values if value is not None)
     if not clean:
@@ -138,7 +142,7 @@ def quality_components(rows, targets, window_seconds=60):
     return components, evidence, missing
 
 
-def summarize_rows(rows, application=None, policy=None, window_seconds=60):
+def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=MIN_SCORED_TRANSACTIONS):
     policy = policy if policy is not None else default_policy()
     total = len(rows)
     if not total:
@@ -176,20 +180,31 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60):
         score = min(components.values())
         extra = {"critical": targets["critical"], "score_components": components,
                  "quality": evidence, "experience_targets": targets, "missing_measurements": missing,
-                 "scoring_complete": not missing, "limiting_application": application}
+                 "scoring_complete": not missing and len(rows) >= minimum_transactions, "limiting_application": application}
     else:
         groups = defaultdict(list)
         for row in rows:
             groups[row.get("application") or "other"].append(row)
         # Include failed-only applications. Healthy/bulk traffic must never
         # average away an outage in a less frequently used business application.
-        summaries = {key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds) for key, items in groups.items()}
+        summaries = {key: summarize_rows(items, application=key, policy=policy, window_seconds=window_seconds,
+                                         minimum_transactions=minimum_transactions) for key, items in groups.items()}
         critical = {key: item for key, item in summaries.items() if item["critical"]}
-        limiting = min(critical, key=lambda key: critical[key]["experience_score"]) if critical else None
-        score = critical[limiting]["experience_score"] if limiting else None
+        # An application with too few transactions shows a score only if it failed; see below. A healthy one is left out.
+        scored = {key: item for key, item in critical.items() if item["experience_score"] is not None}
+        limiting = min(scored, key=lambda key: scored[key]["experience_score"]) if scored else None
+        score = scored[limiting]["experience_score"] if limiting else None
         extra = {"limiting_application": limiting, "critical_applications": sorted(critical),
                  "scoring_complete": bool(critical) and all(item["scoring_complete"] for item in critical.values()),
                  "missing_measurements": {key: item["missing_measurements"] for key, item in critical.items() if item["missing_measurements"]}}
+    insufficient = total < minimum_transactions
+    if application is not None and insufficient:
+        # Too few transactions to grade. Availability still shows failures: a failed application scores its availability,
+        # while a healthy one shows no score rather than a perfect one.
+        floor = reliability_score(availability)
+        score = floor if floor < 100 else None
+    extra["scoring_complete"] = extra["scoring_complete"] and not insufficient
+    extra["insufficient_sample"] = insufficient
     score = max(0.0, min(100.0, score)) if score is not None else None
     return {
         "requests": total,
@@ -200,7 +215,8 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60):
         "p95_ms": round(p95, 3) if p95 is not None else None,
         "average_ms": round(statistics.mean(latencies), 3) if latencies else None,
         "experience_score": round(score, 2) if score is not None else None,
-        "experience": "Incomplete evidence" if score is not None and score >= 75 and not extra["scoring_complete"] else score_label(score),
+        "experience": "Too few transactions" if score is None and insufficient else (
+            "Incomplete evidence" if score is not None and score >= 75 and not extra["scoring_complete"] else score_label(score)),
         "bytes": sum(int(row["response_length"] or 0) for row in rows),
         **extra,
     }
@@ -235,7 +251,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     }
     if diagnosis:
         for key, items in by_app.items():
-            app_summary[key].update(application_detail(key, items))
+            app_summary[key].update(application_detail(key, items, policy))
     persona_summary = {
         key: summarize_rows(items, policy=policy, window_seconds=window_seconds)
         for key, items in sorted(by_persona.items())
