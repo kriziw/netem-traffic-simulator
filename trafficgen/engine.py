@@ -215,7 +215,7 @@ class CorporateUser(HttpUser):
             return 0.2 if getattr(self, "sparse_user", False) else 0
         activity = self.runtime_config.get("activity", "normal")
         bounds = ACTIVITY.get(activity, ACTIVITY["normal"])
-        return getattr(self, "rng", random).uniform(bounds["wait_min"], bounds["wait_max"])
+        return getattr(self, 'rng', random).uniform(bounds["wait_min"], bounds["wait_max"])
 
     def _context(self, application):
         return {
@@ -246,8 +246,8 @@ class CorporateUser(HttpUser):
         rate_bps = self.runtime_config.get("paced_mbps", self.runtime_config["paced_mbps_per_user"] * max(1, bulk)) / max(1, bulk) * 1_000_000
         if not getattr(self, "paced_offset_taken", False):
             self.paced_offset_taken = True
-            gevent.sleep(getattr(self, "rng", random).uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
-        kb = getattr(self, "rng", random).choice(PACED_OBJECT_SIZES_KB)
+            gevent.sleep(getattr(self, 'rng', random).uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
+        kb = getattr(self, 'rng', random).choice(PACED_OBJECT_SIZES_KB)
         PACED_STARTED["requests"] += 1
         PACED_IN_FLIGHT["requests"] += 1
         started = time.monotonic()
@@ -277,18 +277,18 @@ class CorporateUser(HttpUser):
             self.persona = self._claim_persona(self.runtime_config)
             self.mix_revision = revision
         self.app_weights = combined_application_weights(self.persona, self.runtime_config["applications"])
-        app = getattr(self, "rng", random).choices(list(self.app_weights), weights=list(self.app_weights.values()), k=1)[0]
+        app = getattr(self, 'rng', random).choices(list(self.app_weights), weights=list(self.app_weights.values()), k=1)[0]
         handler = getattr(self, f"_app_{app}", self._app_web_saas)
         handler()
 
     def _app_web_saas(self):
-        size = getattr(self, "rng", random).choice([24, 48, 96, 160, 256])
+        size = getattr(self, 'rng', random).choice([24, 48, 96, 160, 256])
         self.client.get(
             f"/web/page?kb={size}",
             name="web/page",
             context=self._context("web_saas"),
         )
-        if getattr(self, "rng", random).random() < 0.25:
+        if getattr(self, 'rng', random).random() < 0.25:
             self.client.post(
                 "/api/action",
                 json={"action": "save", "value": random.randint(1, 1000)},
@@ -302,7 +302,7 @@ class CorporateUser(HttpUser):
             name="collaboration/poll",
             context=self._context("collaboration"),
         )
-        if getattr(self, "rng", random).random() < 0.35:
+        if getattr(self, 'rng', random).random() < 0.35:
             payload = {"message": "synthetic-presence", "sequence": random.randint(1, 999999)}
             self.client.post(
                 "/collaboration/message",
@@ -312,15 +312,15 @@ class CorporateUser(HttpUser):
             )
 
     def _app_file_sync(self):
-        if getattr(self, "rng", random).random() < 0.7:
-            size = getattr(self, "rng", random).choice([256, 512, 1024, 2048])
+        if getattr(self, 'rng', random).random() < 0.7:
+            size = getattr(self, 'rng', random).choice([256, 512, 1024, 2048])
             self.client.get(
                 f"/files/download?kb={size}",
                 name="file-sync/download",
                 context=self._context("file_sync"),
             )
         else:
-            size = getattr(self, "rng", random).choice([128, 256, 512, 1024])
+            size = getattr(self, 'rng', random).choice([128, 256, 512, 1024])
             self.client.post(
                 "/files/upload",
                 data=b"x" * (size * 1024),
@@ -330,8 +330,8 @@ class CorporateUser(HttpUser):
             )
 
     def _app_developer(self):
-        if getattr(self, "rng", random).random() < 0.65:
-            size = getattr(self, "rng", random).choice([512, 1024, 2048, 4096])
+        if getattr(self, 'rng', random).random() < 0.65:
+            size = getattr(self, 'rng', random).choice([512, 1024, 2048, 4096])
             self.client.get(
                 f"/developer/artifact?kb={size}",
                 name="developer/artifact",
@@ -345,7 +345,7 @@ class CorporateUser(HttpUser):
             )
 
     def _app_updates(self):
-        size = getattr(self, "rng", random).choice([1024, 2048, 4096, 8192])
+        size = getattr(self, 'rng', random).choice([1024, 2048, 4096, 8192])
         self.client.get(
             f"/updates/package?kb={size}",
             name="updates/package",
@@ -353,7 +353,7 @@ class CorporateUser(HttpUser):
         )
 
     def _app_backup(self):
-        size = getattr(self, "rng", random).choice([512, 1024, 2048, 4096])
+        size = getattr(self, 'rng', random).choice([512, 1024, 2048, 4096])
         self.client.post(
             "/backup/upload",
             data=b"b" * (size * 1024),
@@ -425,8 +425,6 @@ class CorporateUser(HttpUser):
             deadline = time.perf_counter() + collection_s
             while len(received) < packets and time.perf_counter() < deadline and not receiver.dead:
                 gevent.sleep(0.01)
-            lost = len(sent_times) - len(received)
-            mode = MEDIA_MODES.get(self.runtime_config.get("media_mode"), MEDIA_MODES["strict"])
             if receive_errors:
                 error = receive_errors[0]
             elif not received:
@@ -479,18 +477,18 @@ class CorporateUser(HttpUser):
     def _transaction(self, application, name, action):
         self.client.post(
             "/api/action",
-            json={"action": action, "value": random.randint(1, 1000)},
+            json={"action": action, "value": getattr(self, 'rng', random).randint(1, 1000)},
             name=name,
             context=self._context(application),
         )
 
     def _download(self, application, name, path, kb_choices):
-        self.client.get(f"{path}?kb={getattr(self, "rng", random).choice(kb_choices)}", name=name, context=self._context(application))
+        self.client.get(f"{path}?kb={getattr(self, 'rng', random).choice(kb_choices)}", name=name, context=self._context(application))
 
     def _upload(self, application, name, path, kb_choices):
         self.client.post(
             path,
-            data=b"u" * (getattr(self, "rng", random).choice(kb_choices) * 1024),
+            data=b"u" * (getattr(self, 'rng', random).choice(kb_choices) * 1024),
             headers={"Content-Type": "application/octet-stream"},
             name=name,
             context=self._context(application),
@@ -502,16 +500,16 @@ class CorporateUser(HttpUser):
 
     def _app_mes(self):
         self._transaction("mes", "mes/transaction", "mes-booking")
-        if getattr(self, "rng", random).random() < 0.3:
+        if getattr(self, 'rng', random).random() < 0.3:
             self._transaction("mes", "mes/transaction", "mes-confirmation")
 
     def _app_erp(self):
         self._download("erp", "erp/screen", "/web/page", [32, 64, 96, 128])
-        if getattr(self, "rng", random).random() < 0.4:
+        if getattr(self, 'rng', random).random() < 0.4:
             self._transaction("erp", "erp/posting", "erp-posting")
 
     def _app_plm_cad(self):
-        if getattr(self, "rng", random).random() < 0.7:
+        if getattr(self, 'rng', random).random() < 0.7:
             self._download("plm_cad", "plm/check-out", "/updates/package", [4096, 8192, 12288, 16384])
         else:
             self._upload("plm_cad", "plm/check-in", "/files/upload", [2048, 4096, 8192])
@@ -524,7 +522,7 @@ class CorporateUser(HttpUser):
 
     def _app_emr(self):
         self._download("emr", "emr/chart", "/web/page", [64, 128, 192, 256])
-        if getattr(self, "rng", random).random() < 0.25:
+        if getattr(self, 'rng', random).random() < 0.25:
             self._transaction("emr", "emr/update", "chart-update")
 
     def _app_pacs_imaging(self):
@@ -532,7 +530,7 @@ class CorporateUser(HttpUser):
 
     def _app_core_banking(self):
         self._transaction("core_banking", "banking/transaction", "transaction")
-        if getattr(self, "rng", random).random() < 0.3:
+        if getattr(self, 'rng', random).random() < 0.3:
             self._download("core_banking", "banking/screen", "/web/page", [24, 48])
 
     def _app_cctv_backhaul(self):
