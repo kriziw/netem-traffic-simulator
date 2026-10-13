@@ -11,6 +11,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import deque
 from urllib.parse import urlsplit
 
 import gevent
@@ -110,6 +111,12 @@ def validated_media_mode(value) -> str:
 
 # The largest bounded object the controlled target serves on /files/download. Paced users pick sizes from the
 # list, so their transfers do not run in lockstep.
+# Paced bulk requests begun, cumulative. NetEm subtracts the completed ones to count what is still in flight.
+PACED_STARTED = {"requests": 0}
+# The loop monitor wakes this often: a wake-up later than this is time the event loop was held.
+LOOP_INTERVAL_S = 0.2
+# How much recent history the health endpoint returns for the calibration log.
+TELEMETRY_WINDOW_S = 10
 PACED_OBJECT_KB = 4096
 PACED_OBJECT_SIZES_KB = (1024, 2048, 3072, 4096)
 
@@ -181,6 +188,7 @@ class CorporateUser(HttpUser):
             self.paced_offset_taken = True
             gevent.sleep(random.uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
         kb = random.choice(PACED_OBJECT_SIZES_KB)
+        PACED_STARTED["requests"] += 1
         started = time.monotonic()
         self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download",
                         context=self._context("guest_internet"))
@@ -465,6 +473,10 @@ class WorkloadController:
         self.target_greenlet = None
         self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
+        self.counters = {"requests": 0, "failures": 0, "bytes": 0, "paced_completed": 0}
+        self.timings = {"status_ms": None, "dem_ms": None, "write_ms": None, "write_ms_max": None}
+        self.loop_samples = deque(maxlen=round(TELEMETRY_WINDOW_S / LOOP_INTERVAL_S))
+        self.target_samples = deque(maxlen=TELEMETRY_WINDOW_S)
         self.stop_event = threading.Event()
         self.writer_thread = threading.Thread(
             target=self._writer_loop, name="trafficgen-db-writer", daemon=True
@@ -474,6 +486,7 @@ class WorkloadController:
             target=self._dem_loop, name="trafficgen-dem-sampler", daemon=True
         )
         self.dem_thread.start()
+        self.monitor_greenlets = [gevent.spawn(self._loop_monitor), gevent.spawn(self._target_pulse_loop)]
 
     def _writer_loop(self):
         while not self.stop_event.is_set() or not self.transaction_queue.empty():
@@ -489,7 +502,9 @@ class WorkloadController:
                         batch.append(self.transaction_queue.get_nowait())
                     except queue.Empty:
                         break
+                started = time.perf_counter()
                 record_transactions(self.settings.database_path, batch)
+                self._note_timing("write_ms", (time.perf_counter() - started) * 1000.0)
             except Exception as exc:
                 self.persistence_error = str(exc)[:240]
                 self.dropped_transactions += len(batch)
@@ -506,12 +521,14 @@ class WorkloadController:
             if not run or run.get("status") not in ("starting", "running"):
                 continue
             try:
+                started = time.perf_counter()
                 summary = dem_summary(
                     self.settings.database_path,
                     run_id=run["run_id"],
                     window_seconds=60,
                     diagnosis=False,
                 )
+                self._note_timing("dem_ms", (time.perf_counter() - started) * 1000.0)
                 users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
                 sample = {
                     "timestamp": time.time(),
@@ -567,10 +584,72 @@ class WorkloadController:
             "udp_jitter_ms": ctx.get("udp_jitter_ms"),
             "egress": ctx.get("egress") or details["egress"],
         }
+        self.counters["requests"] += 1
+        self.counters["failures"] += 0 if exception is None else 1
+        self.counters["bytes"] += int(response_length or 0)
+        if str(name).startswith("paced/"):
+            self.counters["paced_completed"] += 1
         try:
             self.transaction_queue.put_nowait(item)
         except queue.Full:
             self.dropped_transactions += 1
+
+    def _note_timing(self, name, milliseconds):
+        self.timings[name] = round(milliseconds, 1)
+        if name == "write_ms":
+            self.timings["write_ms_max"] = max(self.timings["write_ms_max"] or 0.0, round(milliseconds, 1))
+
+    def telemetry(self):
+        """Cumulative counters and the last timings of the work that can hold this process's event loop."""
+        return {"requests": self.counters["requests"], "failures": self.counters["failures"],
+                "bytes": self.counters["bytes"], "dropped_transactions": self.dropped_transactions,
+                "paced_started": PACED_STARTED["requests"], "paced_completed": self.counters["paced_completed"],
+                **self.timings}
+
+    def loop_telemetry(self, seconds=TELEMETRY_WINDOW_S):
+        """Recent event-loop lateness and target health latency, as [unix time, value] pairs."""
+        cutoff = time.time() - seconds
+        return {
+            "loop": {"interval_s": LOOP_INTERVAL_S,
+                     "samples": [[round(stamp, 3), lag] for stamp, lag in list(self.loop_samples) if stamp >= cutoff]},
+            "target_probe": {"samples": [[round(stamp, 3), latency] for stamp, latency in list(self.target_samples)
+                                         if stamp >= cutoff]},
+        }
+
+    def _loop_monitor(self):
+        """How late this process wakes after a short sleep. Every workload user, the HTTP server and the UDP echo run
+        on this loop, so a late wake-up is felt by all of them at once."""
+        while not self.stop_event.is_set():
+            started = time.perf_counter()
+            gevent.sleep(LOOP_INTERVAL_S)
+            lag = max(0.0, (time.perf_counter() - started - LOOP_INTERVAL_S) * 1000.0)
+            self.loop_samples.append((time.time(), round(lag, 1)))
+
+    def _target_pulse_loop(self):
+        """Once a second during a run, asks the controlled target for its health and records how long it took.
+        A target that answers late can stop downloads arriving, so its timing belongs in the calibration log."""
+        while not self.stop_event.is_set():
+            with self.lock:
+                run = dict(self.run) if self.run else None
+            if run and run.get("status") in ("starting", "running") and run.get("target"):
+                self.target_samples.append((time.time(), self._target_latency(run)))
+            gevent.sleep(1.0)
+
+    def _target_latency(self, run):
+        """Milliseconds the target took to answer its health check over the run's route, or None if it did not."""
+        started = time.perf_counter()
+        try:
+            source = (run.get("traffic_path") or {}).get("source")
+            if source:
+                from .traffic_paths import bind_http
+                with bind_http(requests.Session(), source) as bound:
+                    response = bound.get(run["target"] + "/health", timeout=(2, 2), allow_redirects=False)
+            else:
+                response = requests.get(run["target"] + "/health", timeout=(2, 2), allow_redirects=False)
+            response.raise_for_status()
+        except (requests.RequestException, OSError, ValueError, RuntimeError):
+            return None
+        return round((time.perf_counter() - started) * 1000.0, 1)
 
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
@@ -882,12 +961,14 @@ class WorkloadController:
                 "users": 0,
                 "dem": dem_summary(self.settings.database_path, window_seconds=60),
             }
+        started = time.perf_counter()
         dem = dem_summary(
             self.settings.database_path,
             run_id=run["run_id"],
             window_seconds=60,
             media_mode=run.get("media_mode", "strict"),
         )
+        self._note_timing("status_ms", (time.perf_counter() - started) * 1000.0)
         outdated = target_finding(run.get("target_info"), __version__)
         if outdated:
             dem["diagnosis"]["findings"].insert(0, outdated)
@@ -908,5 +989,7 @@ class WorkloadController:
         except Exception:
             pass
         self.stop_event.set()
+        for greenlet in self.monitor_greenlets:
+            greenlet.kill()
         self.writer_thread.join(timeout=5)
         self.dem_thread.join(timeout=5)
