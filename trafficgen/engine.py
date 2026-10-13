@@ -108,6 +108,10 @@ def validated_media_mode(value) -> str:
     return value
 
 
+# The largest bounded object the controlled target serves on /files/download.
+PACED_OBJECT_KB = 4096
+
+
 class CorporateUser(HttpUser):
     abstract = True
     runtime_config = {}
@@ -145,6 +149,8 @@ class CorporateUser(HttpUser):
         return bounded
 
     def wait_time(self):
+        if self.runtime_config.get("paced_mbps_per_user"):
+            return 0
         activity = self.runtime_config.get("activity", "normal")
         bounds = ACTIVITY.get(activity, ACTIVITY["normal"])
         return random.uniform(bounds["wait_min"], bounds["wait_max"])
@@ -157,8 +163,23 @@ class CorporateUser(HttpUser):
             "application": application,
         }
 
+    def _paced_bulk(self):
+        """Calibration traffic: bounded objects back to back, each user paced to its share of the target rate.
+        A link or host that cannot keep up takes longer, so the achieved rate falls below the target."""
+        rate_bps = self.runtime_config["paced_mbps_per_user"] * 1_000_000
+        started = time.monotonic()
+        self.client.get(f"/files/download?kb={PACED_OBJECT_KB}", name="paced/bulk-download",
+                        context=self._context("guest_internet"))
+        due = PACED_OBJECT_KB * 1024 * 8 / rate_bps
+        remaining = due - (time.monotonic() - started)
+        if remaining > 0:
+            gevent.sleep(remaining)
+
     @task
     def corporate_action(self):
+        if self.runtime_config.get("paced_mbps_per_user"):
+            self._paced_bulk()
+            return
         revision = self.runtime_config.get("mix_revision", 0)
         if revision != self.mix_revision:
             self.persona = weighted_choice(self.runtime_config["personas"])
@@ -537,7 +558,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -557,6 +578,10 @@ class WorkloadController:
         if label is not None and (not isinstance(label, str) or len(label.strip()) > 120):
             raise ValueError("label must be text of at most 120 characters.")
 
+        paced_mbps = raw.get("paced_mbps")
+        if paced_mbps is not None:
+            # Calibration: every user paces bounded downloads to this aggregate rate; the persona mix is not used.
+            paced_mbps = bounded_number(paced_mbps, "paced_mbps", 0.1, 1000)
         target = str(raw.get("target") or self.settings.default_target).rstrip("/")
         parsed = urlsplit(target)
         try:
@@ -596,6 +621,8 @@ class WorkloadController:
             "media_mode": media_mode,
             # Describes what the run represents, e.g. the site NetEm modelled it on.
             "label": (label or "").strip() or None,
+            "paced_mbps": paced_mbps,
+            "paced_mbps_per_user": round(paced_mbps / users, 6) if paced_mbps else None,
             "udp_port": self.settings.target_udp_port,
             "stage": None,
             "mix_revision": 0,
