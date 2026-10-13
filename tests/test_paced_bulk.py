@@ -47,6 +47,29 @@ def test_paced_users_do_not_wait_between_transfers_and_skip_the_persona_mix():
     web.assert_not_called()
 
 
+def test_a_share_of_the_paced_users_sends_udp_bursts_instead_of_downloads():
+    user = paced_user(4.0)
+    user.sparse_user = True
+    with patch.object(user, "_app_ot_telemetry") as ot, patch.object(user, "_paced_bulk") as paced:
+        assert user.wait_time() == 0.2
+        user.corporate_action()
+    ot.assert_called_once_with()
+    paced.assert_not_called()
+
+
+def test_the_sparse_share_is_chosen_per_user_and_needs_a_paced_rate(simulator):
+    with patch.object(engine.random, "random", return_value=0.1):
+        assert engine.paced_sparse_user({"paced_mbps_per_user": 4.0, "sparse_share": 0.2}) is True
+        assert engine.paced_sparse_user({"paced_mbps_per_user": 4.0, "sparse_share": 0.05}) is False
+        assert engine.paced_sparse_user({"sparse_share": 0.2}) is False
+    run = controller(simulator)._validate_start({"users": 50, "paced_mbps": 200, "sparse_share": 0.2})
+    assert run["sparse_share"] == 0.2
+    with pytest.raises(ValueError):
+        controller(simulator)._validate_start({"users": 50, "sparse_share": 0.2})
+    with pytest.raises(ValueError):
+        controller(simulator)._validate_start({"users": 50, "paced_mbps": 200, "sparse_share": 0.9})
+
+
 def test_a_fast_transfer_is_paced_to_the_users_share_of_the_rate():
     user = paced_user(4.0)
     with patch.object(engine.gevent, "sleep") as sleep, patch.object(engine.random, "choice", return_value=4096):
