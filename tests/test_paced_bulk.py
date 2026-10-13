@@ -62,11 +62,10 @@ def test_a_share_of_the_paced_users_sends_udp_bursts_instead_of_downloads():
     paced.assert_not_called()
 
 
-def test_the_sparse_share_is_chosen_per_user_and_needs_a_paced_rate(simulator):
-    with patch.object(engine.random, "random", return_value=0.1):
-        assert engine.paced_sparse_user({"paced_mbps_per_user": 4.0, "sparse_share": 0.2}) is True
-        assert engine.paced_sparse_user({"paced_mbps_per_user": 4.0, "sparse_share": 0.05}) is False
-        assert engine.paced_sparse_user({"sparse_share": 0.2}) is False
+def test_exactly_the_sparse_slots_are_claimed_and_only_by_paced_users(simulator):
+    config = {"paced_mbps_per_user": 4.0, "sparse_slots": 2, "sparse_claimed": 0}
+    assert [engine.claim_sparse_slot(config) for _ in range(3)] == [True, True, False]
+    assert engine.claim_sparse_slot({"sparse_slots": 2, "sparse_claimed": 0}) is False
     run = controller(simulator)._validate_start({"users": 50, "paced_mbps": 200, "sparse_share": 0.2})
     assert run["sparse_share"] == 0.2
     with pytest.raises(ValueError):
