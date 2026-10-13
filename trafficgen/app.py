@@ -41,6 +41,7 @@ from .dem import dem_summary
 from .experience_policy import load_policy, save_policy
 from .diagnosis import target_finding
 from .engine import WorkloadController
+from .offload import offloaded
 from .profiles import profile_payload
 from . import maintenance
 from . import remote_target
@@ -1023,7 +1024,8 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = dem_summary(
+        summary = offloaded(
+            dem_summary,
             settings.database_path,
             run_id=run_id,
             window_seconds=window,
@@ -1044,7 +1046,7 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -1064,7 +1066,7 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -1085,7 +1087,7 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         endpoints = list(summary["endpoints"].values())
         endpoints.sort(
             key=lambda item: (
@@ -1133,7 +1135,7 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = dem_summary(settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
         return jsonify(
             {
                 "timestamp": summary["timestamp"],

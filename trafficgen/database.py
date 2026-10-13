@@ -89,6 +89,12 @@ def init_db(path: Path):
             );
             CREATE INDEX IF NOT EXISTS idx_dem_time
                 ON dem_samples(timestamp);
+            CREATE TABLE IF NOT EXISTS dem_snapshots (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                created REAL NOT NULL,
+                run_id TEXT,
+                payload TEXT NOT NULL
+            );
             """
         )
         sample_columns = list(conn.execute("PRAGMA table_info(dem_samples)"))
@@ -203,6 +209,27 @@ def record_dem_sample(path: Path, sample: dict):
                 sample["experience_score"],
             ),
         )
+
+
+def write_dem_snapshot(path: Path, snapshot: dict):
+    """Replaces the single published DEM snapshot."""
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO dem_snapshots (id, created, run_id, payload) VALUES (1, ?, ?, ?)",
+            (snapshot["created"], snapshot.get("run_id"), json.dumps(snapshot, sort_keys=True, default=str)),
+        )
+
+
+def read_dem_snapshot(path: Path):
+    """The published DEM snapshot, or None when none has been published or it cannot be read."""
+    with connect(path) as conn:
+        row = conn.execute("SELECT payload FROM dem_snapshots WHERE id = 1").fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["payload"])
+    except ValueError:
+        return None
 
 
 def query_dem_timeseries(path: Path, since: float, limit: int = 2000):
