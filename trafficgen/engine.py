@@ -4,7 +4,10 @@ import copy
 import ipaddress
 import logging
 import math
+import os
 import struct
+import subprocess
+import sys
 import queue
 import random
 import socket
@@ -30,7 +33,10 @@ from .database import (
     prune_history,
     update_run,
 )
+from .database import read_dem_snapshot
 from .dem import dem_summary
+from .dem_worker import SNAPSHOT_MAX_AGE_S, fresh_snapshot
+from .offload import offloaded
 from .diagnosis import MediaFailure, classify_failure, response_details, target_finding
 from .profiles import (
     ACTIVITY,
@@ -464,6 +470,7 @@ class WorkloadController:
         self.lock = threading.RLock()
         recover_runs(settings.database_path)
         self.last_pruned = 0
+        self.last_sampled = None
         self.persistence_error = None
         self.dropped_transactions = 0
         self.environment = None
@@ -487,6 +494,7 @@ class WorkloadController:
         )
         self.dem_thread.start()
         self.monitor_greenlets = [gevent.spawn(self._loop_monitor), gevent.spawn(self._target_pulse_loop)]
+        self.dem_worker = self._start_dem_worker()
 
     def _writer_loop(self):
         while not self.stop_event.is_set() or not self.transaction_queue.empty():
@@ -503,7 +511,7 @@ class WorkloadController:
                     except queue.Empty:
                         break
                 started = time.perf_counter()
-                record_transactions(self.settings.database_path, batch)
+                offloaded(record_transactions, self.settings.database_path, batch)
                 self._note_timing("write_ms", (time.perf_counter() - started) * 1000.0)
             except Exception as exc:
                 self.persistence_error = str(exc)[:240]
@@ -521,14 +529,17 @@ class WorkloadController:
             if not run or run.get("status") not in ("starting", "running"):
                 continue
             try:
-                started = time.perf_counter()
-                summary = dem_summary(
-                    self.settings.database_path,
-                    run_id=run["run_id"],
-                    window_seconds=60,
-                    diagnosis=False,
-                )
-                self._note_timing("dem_ms", (time.perf_counter() - started) * 1000.0)
+                snapshot = fresh_snapshot(read_dem_snapshot(self.settings.database_path), run["run_id"])
+                if snapshot is None:
+                    # The worker has not published this run recently: sample a DEM computed here, off the event loop.
+                    summary = offloaded(dem_summary, self.settings.database_path, run_id=run["run_id"],
+                                        window_seconds=60, diagnosis=False)
+                elif snapshot["created"] == self.last_sampled:
+                    continue
+                else:
+                    self.last_sampled = snapshot["created"]
+                    summary = snapshot["dem"]
+                    self._note_timing("dem_ms", snapshot.get("compute_ms"))
                 users = int(getattr(runner, "user_count", 0) or 0) if runner else 0
                 sample = {
                     "timestamp": time.time(),
@@ -543,7 +554,7 @@ class WorkloadController:
                 }
                 record_dem_sample(self.settings.database_path, sample)
                 if time.time() - self.last_pruned >= 3600:
-                    prune_history(self.settings.database_path)
+                    offloaded(prune_history, self.settings.database_path)
                     self.last_pruned = time.time()
             except Exception as exc:
                 self.persistence_error = str(exc)[:240]
@@ -650,6 +661,24 @@ class WorkloadController:
         except (requests.RequestException, OSError, ValueError, RuntimeError):
             return None
         return round((time.perf_counter() - started) * 1000.0, 1)
+
+    def _start_dem_worker(self):
+        """The process that publishes the live DEM. Its standard input stays open for as long as this simulator runs:
+        when this process exits, the pipe closes and the worker exits too."""
+        if os.environ.get("TRAFFICGEN_DEM_WORKER", "1") == "0":
+            return None
+        return subprocess.Popen(
+            [sys.executable, "-m", "trafficgen.dem_worker", "--database", str(self.settings.database_path)],
+            stdin=subprocess.PIPE,
+        )
+
+    def _live_dem(self, run):
+        """The DEM of the active run: the worker's snapshot while it is fresh, otherwise computed off the event loop."""
+        snapshot = fresh_snapshot(read_dem_snapshot(self.settings.database_path), run["run_id"])
+        if snapshot is not None:
+            return snapshot["dem"]
+        return offloaded(dem_summary, self.settings.database_path, run_id=run["run_id"], window_seconds=60,
+                         media_mode=run.get("media_mode", "strict"))
 
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
@@ -962,12 +991,7 @@ class WorkloadController:
                 "dem": dem_summary(self.settings.database_path, window_seconds=60),
             }
         started = time.perf_counter()
-        dem = dem_summary(
-            self.settings.database_path,
-            run_id=run["run_id"],
-            window_seconds=60,
-            media_mode=run.get("media_mode", "strict"),
-        )
+        dem = self._live_dem(run)
         self._note_timing("status_ms", (time.perf_counter() - started) * 1000.0)
         outdated = target_finding(run.get("target_info"), __version__)
         if outdated:
@@ -991,5 +1015,7 @@ class WorkloadController:
         self.stop_event.set()
         for greenlet in self.monitor_greenlets:
             greenlet.kill()
+        if self.dem_worker is not None and self.dem_worker.poll() is None:
+            self.dem_worker.terminate()
         self.writer_thread.join(timeout=5)
         self.dem_thread.join(timeout=5)
