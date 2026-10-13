@@ -116,3 +116,29 @@ def test_cancelled_http_is_recorded_and_removed_from_outstanding_work():
     assert event["context"]["cancelled"]
     assert event["exception"] is not None
     assert not user.runtime_config["in_flight"]
+
+
+def test_snapshot_from_before_adjustment_is_not_current_evidence():
+    snapshot = {"run_id": "example", "created": 100, "dem": {"requests": 100, "contract_epoch": 50}}
+    assert fresh_snapshot(snapshot, "example", now=101, contract_epoch=60) is None
+    assert fresh_snapshot(snapshot, "example", now=101, contract_epoch=50) is snapshot
+
+
+def test_media_blackhole_is_complete_zero_without_requiring_unmeasurable_jitter():
+    rows = [row("voice", ok=False, packets_sent=50, packets_lost=50)] * 20
+    result = summarize_rows(rows, "voice")
+    assert result["experience_score"] == 0
+    assert result["scoring_complete"]
+
+
+def test_population_reconciliation_tolerates_users_whose_start_hook_has_not_run():
+    from types import SimpleNamespace
+    from trafficgen.engine import WorkloadController
+    controller = WorkloadController.__new__(WorkloadController)
+    pending = SimpleNamespace()
+    started = SimpleNamespace(persona="knowledge_worker")
+    controller.runner = SimpleNamespace(user_greenlets=[SimpleNamespace(args=[pending]), SimpleNamespace(args=[started])])
+    controller.run = {"manifest": {"persona_counts": {"knowledge_worker": 2}}}
+    controller._reconcile_population()
+    assert controller.run["persona_claimed"] == {"knowledge_worker": 1}
+    assert not started.sparse_user

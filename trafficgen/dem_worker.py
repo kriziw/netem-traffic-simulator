@@ -44,9 +44,11 @@ def publish_once(database_path, now=None):
     return snapshot
 
 
-def fresh_snapshot(snapshot, run_id, now=None):
+def fresh_snapshot(snapshot, run_id, now=None, contract_epoch=None):
     """The published snapshot when it is for this run and recent enough to show; otherwise None."""
     if not snapshot or snapshot.get("run_id") != run_id or not snapshot.get("dem"):
+        return None
+    if contract_epoch is not None and snapshot["dem"].get("contract_epoch") != contract_epoch:
         return None
     if not 0 <= (time.time() if now is None else now) - snapshot["created"] <= SNAPSHOT_MAX_AGE_S:
         return None

@@ -620,7 +620,7 @@ class WorkloadController:
                 if self.dem_worker is not None and self.dem_worker.poll() is not None and time.monotonic() - self.last_worker_restart > 10:
                     self.last_worker_restart = time.monotonic()
                     self.dem_worker = self._start_dem_worker()
-                snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"])
+                snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"))
                 if snapshot is None:
                     # The worker has not published this run recently: sample a DEM computed here, off the event loop.
                     summary = offloaded(dem_summary, self.settings.database_path, run_id=run["run_id"],
@@ -777,7 +777,7 @@ class WorkloadController:
     def _live_dem(self, run):
         """The DEM of the active run: the worker's snapshot while it is fresh, otherwise computed off the event loop."""
         with self.dem_lock:
-            snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"])
+            snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"))
             if snapshot is not None:
                 return snapshot["dem"]
             cached = self.last_live_dem
@@ -949,7 +949,8 @@ class WorkloadController:
     def _reconcile_population(self, user_count=None, **_kwargs):
         if not self.runner or not self.run:
             return
-        users = [greenlet.args[0] for greenlet in self.runner.user_greenlets if greenlet.args]
+        users = [greenlet.args[0] for greenlet in self.runner.user_greenlets
+                 if greenlet.args and hasattr(greenlet.args[0], "persona")]
         desired = dict(self.run["manifest"]["persona_counts"])
         displaced = []
         for user in users:

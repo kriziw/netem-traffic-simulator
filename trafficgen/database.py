@@ -329,11 +329,13 @@ def update_run(path: Path, run: dict):
 
 def save_contract(path, run, effective_at=None):
     """Append immutable configuration epochs; never overwrite historical scoring inputs."""
-    payload = {key: run.get(key) for key in ("policy", "manifest", "score_model", "media_mode", "seed", "generation_mode")}
+    effective_at = time.time() if effective_at is None else effective_at
+    run["contract_epoch"] = effective_at
+    payload = {key: run.get(key) for key in ("contract_epoch", "policy", "manifest", "score_model", "media_mode", "seed", "generation_mode")}
     payload["dropped_transactions"] = run.get("dropped_transactions", 0)
     with connect(path) as conn:
         conn.execute("INSERT INTO run_contracts(run_id, effective_at, payload) VALUES (?, ?, ?)",
-                     (run["run_id"], time.time() if effective_at is None else effective_at, json.dumps(payload)))
+                     (run["run_id"], effective_at, json.dumps(payload)))
 
 
 def record_data_loss(path, run_id, count):

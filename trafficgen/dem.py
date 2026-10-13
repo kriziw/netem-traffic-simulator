@@ -255,6 +255,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     rows = query_transactions(database_path, start, run_id=run_id, limit=50000, until=end)
     contract, mixed = scoring_contract(database_path, run_id, start, end)
     policy = contract["policy"] if contract else load_policy(database_path)
+    media_mode = (contract or {}).get("media_mode") or media_mode
     shares = contract["manifest"]["application_shares"] if contract else None
     overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds, application_shares=shares)
     reasons = []
@@ -262,6 +263,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         reasons.append("row_limit")
     if mixed:
         reasons.append("configuration_changed_in_window")
+        overall["experience_score"] = None
     if contract and contract.get("dropped_transactions", 0):
         reasons.append("dropped_transactions")
     if reasons:
@@ -327,7 +329,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         "truncated": len(rows) >= 50000,
         "timestamp": now, "run_id": run_id, "since": start, "until": end,
         "evidence_issues": reasons, "policy_source": "run_snapshot" if contract else "current_policy_regrade",
-        "score_model": SCORE_MODEL, "regraded": not bool(contract),
+        "score_model": SCORE_MODEL, "regraded": not bool(contract), "contract_epoch": (contract or {}).get("contract_epoch"),
         "window_seconds": window_seconds,
         **overall,
         "requests_per_second": round(rps, 3),
