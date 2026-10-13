@@ -14,9 +14,18 @@ def test_requests_failures_and_bytes_are_counted(simulator):
     assert controller.counters["bytes"] == before["bytes"] + 500
 
 
+def test_paced_downloads_completed_are_counted_separately(simulator):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    before = controller.counters["paced_completed"]
+    controller._record_request("HTTP", "paced/bulk-download", 40.0, 4096, None, {})
+    controller._record_request("HTTP", "office/mail", 12.0, 100, None, {})
+    assert controller.counters["paced_completed"] == before + 1
+
+
 def test_health_reports_counters_loop_samples_and_target_probe(simulator):
     response = simulator.test_client().get("/api/v1/health").json
-    assert {"requests", "failures", "bytes", "status_ms", "dem_ms", "write_ms"} <= set(response["counters"])
+    assert {"requests", "failures", "bytes", "paced_started", "paced_completed", "status_ms", "dem_ms",
+            "write_ms"} <= set(response["counters"])
     assert response["loop"]["interval_s"] == engine.LOOP_INTERVAL_S
     assert isinstance(response["loop"]["samples"], list)
     assert isinstance(response["target_probe"]["samples"], list)

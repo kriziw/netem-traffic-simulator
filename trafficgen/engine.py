@@ -111,6 +111,8 @@ def validated_media_mode(value) -> str:
 
 # The largest bounded object the controlled target serves on /files/download. Paced users pick sizes from the
 # list, so their transfers do not run in lockstep.
+# Paced bulk requests begun, cumulative. NetEm subtracts the completed ones to count what is still in flight.
+PACED_STARTED = {"requests": 0}
 # The loop monitor wakes this often: a wake-up later than this is time the event loop was held.
 LOOP_INTERVAL_S = 0.2
 # How much recent history the health endpoint returns for the calibration log.
@@ -186,6 +188,7 @@ class CorporateUser(HttpUser):
             self.paced_offset_taken = True
             gevent.sleep(random.uniform(0, PACED_OBJECT_KB * 1024 * 8 / rate_bps))
         kb = random.choice(PACED_OBJECT_SIZES_KB)
+        PACED_STARTED["requests"] += 1
         started = time.monotonic()
         self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download",
                         context=self._context("guest_internet"))
@@ -470,7 +473,7 @@ class WorkloadController:
         self.target_greenlet = None
         self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
-        self.counters = {"requests": 0, "failures": 0, "bytes": 0}
+        self.counters = {"requests": 0, "failures": 0, "bytes": 0, "paced_completed": 0}
         self.timings = {"status_ms": None, "dem_ms": None, "write_ms": None, "write_ms_max": None}
         self.loop_samples = deque(maxlen=round(TELEMETRY_WINDOW_S / LOOP_INTERVAL_S))
         self.target_samples = deque(maxlen=TELEMETRY_WINDOW_S)
@@ -584,6 +587,8 @@ class WorkloadController:
         self.counters["requests"] += 1
         self.counters["failures"] += 0 if exception is None else 1
         self.counters["bytes"] += int(response_length or 0)
+        if str(name).startswith("paced/"):
+            self.counters["paced_completed"] += 1
         try:
             self.transaction_queue.put_nowait(item)
         except queue.Full:
@@ -598,6 +603,7 @@ class WorkloadController:
         """Cumulative counters and the last timings of the work that can hold this process's event loop."""
         return {"requests": self.counters["requests"], "failures": self.counters["failures"],
                 "bytes": self.counters["bytes"], "dropped_transactions": self.dropped_transactions,
+                "paced_started": PACED_STARTED["requests"], "paced_completed": self.counters["paced_completed"],
                 **self.timings}
 
     def loop_telemetry(self, seconds=TELEMETRY_WINDOW_S):
