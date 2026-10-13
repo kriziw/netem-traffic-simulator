@@ -480,7 +480,8 @@ class WorkloadController:
         self.target_greenlet = None
         self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
-        self.counters = {"requests": 0, "failures": 0, "bytes": 0, "paced_completed": 0}
+        self.counters = {"requests": 0, "failures": 0, "bytes": 0, "paced_completed": 0,
+                         "paced_wait_ms": 0.0, "paced_transfer_ms": 0.0}
         self.timings = {"status_ms": None, "dem_ms": None, "write_ms": None, "write_ms_max": None}
         self.loop_samples = deque(maxlen=round(TELEMETRY_WINDOW_S / LOOP_INTERVAL_S))
         self.target_samples = deque(maxlen=TELEMETRY_WINDOW_S)
@@ -600,6 +601,8 @@ class WorkloadController:
         self.counters["bytes"] += int(response_length or 0)
         if str(name).startswith("paced/"):
             self.counters["paced_completed"] += 1
+            self.counters["paced_wait_ms"] += details["wait_ms"] or 0.0
+            self.counters["paced_transfer_ms"] += details["transfer_ms"] or 0.0
         try:
             self.transaction_queue.put_nowait(item)
         except queue.Full:
@@ -615,6 +618,10 @@ class WorkloadController:
         return {"requests": self.counters["requests"], "failures": self.counters["failures"],
                 "bytes": self.counters["bytes"], "dropped_transactions": self.dropped_transactions,
                 "paced_started": PACED_STARTED["requests"], "paced_completed": self.counters["paced_completed"],
+                "paced_wait_ms": round(self.counters["paced_wait_ms"], 1),
+                "paced_transfer_ms": round(self.counters["paced_transfer_ms"], 1),
+                # Process CPU seconds, all threads: a share of one core at 100 per cent.
+                "cpu_s": round(time.process_time(), 3),
                 **self.timings}
 
     def loop_telemetry(self, seconds=TELEMETRY_WINDOW_S):
@@ -751,7 +758,8 @@ class WorkloadController:
             # Describes what the run represents, e.g. the site NetEm modelled it on.
             "label": (label or "").strip() or None,
             "paced_mbps": paced_mbps,
-            "paced_mbps_per_user": round(paced_mbps / users, 6) if paced_mbps else None,
+            # Only the users that download share the rate: a sparse user sends UDP bursts instead.
+            "paced_mbps_per_user": round(paced_mbps / (users * (1 - sparse_share)), 6) if paced_mbps else None,
             "sparse_share": sparse_share,
             "udp_port": self.settings.target_udp_port,
             "stage": None,

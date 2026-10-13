@@ -31,6 +31,12 @@ def test_health_reports_counters_loop_samples_and_target_probe(simulator):
     assert isinstance(response["target_probe"]["samples"], list)
 
 
+def test_the_health_reports_cpu_and_paced_timings(simulator):
+    response = simulator.test_client().get("/api/v1/health").json
+    assert {"cpu_s", "paced_wait_ms", "paced_transfer_ms"} <= set(response["counters"])
+    assert response["counters"]["cpu_s"] >= 0
+
+
 def test_loop_monitor_records_how_late_the_loop_woke(simulator):
     controller = simulator.config["TRAFFICGEN_CONTROLLER"]
     gevent.sleep(0.6)
