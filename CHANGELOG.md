@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.18.0...v0.19.0) (2026-10-13)
+
+
+### Features
+
+* report event-loop lag, request counters and target latency for calibration logs ([#58](https://github.com/kriziw/netem-traffic-simulator/issues/58)) ([a26bc4d](https://github.com/kriziw/netem-traffic-simulator/commit/a26bc4d39b291d5777d486ec5f0bda8fa7c0909a))
+
+
+### Performance Improvements
+
+* compute the live DEM in a worker process and keep writes and queries off the event loop ([#59](https://github.com/kriziw/netem-traffic-simulator/issues/59)) ([8dd570f](https://github.com/kriziw/netem-traffic-simulator/commit/8dd570f37bed384774d2d0eb8dced28acd57bc7c))
+
 ## [0.18.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.17.1...v0.18.0) (2026-10-13)
 
 
