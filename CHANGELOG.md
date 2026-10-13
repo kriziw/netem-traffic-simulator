@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.17.1...v0.18.0) (2026-10-13)
+
+
+### Features
+
+* a share of paced users sends OT-style UDP bursts during a calibration ([#56](https://github.com/kriziw/netem-traffic-simulator/issues/56)) ([08a8c8f](https://github.com/kriziw/netem-traffic-simulator/commit/08a8c8f2fbd2b57aec8fe02b4f6f7966d87189dc))
+
 ## [0.17.1](https://github.com/kriziw/netem-traffic-simulator/compare/v0.17.0...v0.17.1) (2026-10-13)
 
 
