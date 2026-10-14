@@ -33,7 +33,7 @@
   </div></div></section>
   <section class="card">
     <div class="card-head">
-      <div><div class="card-title">Live endpoint experience</div><div class="card-sub">Last 60 seconds across simulated users</div></div>
+      <div><div class="card-title">Live endpoint experience</div><div class="card-sub" id="live-window">Last {{ status.dem.window_seconds|round(1) }} seconds across simulated users</div></div>
       <a class="btn small" href="{{ url_for('dem_page') }}">Open DEM</a>
     </div>
     <div class="card-body">
@@ -48,7 +48,7 @@
         <div><span>P95</span><strong id="live-p95-card">{{ "%.0f"|format(status.dem.p95_ms) if status.dem.p95_ms is not none else '—' }} ms</strong></div>
       </div>
       {% set top_finding = ((status.dem.diagnosis or {}).findings or [none])[0] %}
-      <a class="live-finding {{ top_finding.severity if top_finding else 'good' }}" id="live-finding" href="{{ url_for('dem_page') }}">{{ top_finding.title if top_finding else 'No problems detected in the last 60 seconds.' }}</a>
+      <a class="live-finding {{ top_finding.severity if top_finding else 'good' }}" id="live-finding" href="{{ url_for('dem_page') }}">{{ top_finding.title if top_finding else 'No current application findings.' }}</a>
     </div>
   </section>
 

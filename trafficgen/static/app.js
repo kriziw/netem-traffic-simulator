@@ -188,6 +188,7 @@ window.TrafficGen = (() => {
         set("execution-target",status.run?.target||path.target||"—");
         set("execution-stop-reason",status.run?.stop_reason||"—");
         set("live-users",status.users??0);
+        set("live-window","Last "+fmt(dem.window_seconds,1)+" seconds across simulated users");
         set("live-score",dem.experience_score??"—");
         set("live-rating",dem.experience||"No data");
         set("live-availability",dem.availability_pct==null?"—":fmt(dem.availability_pct,2)+"%");
@@ -200,11 +201,11 @@ window.TrafficGen = (() => {
         set("live-p95-card",(dem.p95_ms==null?"—":fmt(dem.p95_ms,0))+" ms");
         const top=((dem.diagnosis||{}).findings||[])[0];
         const finding=document.getElementById("live-finding");
-        if(finding){finding.textContent=top?top.title:"No problems detected in the last 60 seconds.";finding.className="live-finding "+(top?top.severity:"good");}
+        if(finding){finding.textContent=top?top.title:"No current application findings.";finding.className="live-finding "+(top?top.severity:"good");}
       }catch(_){}
     }
     refresh();
-    repeat(refresh,2500);
+    repeat(refresh,1000);
   }
   async function demPage(){
     const range=document.getElementById("dem-range");
