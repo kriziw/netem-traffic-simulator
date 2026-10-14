@@ -1057,6 +1057,8 @@ def create_app():
             if summary["evidence_issues"]:
                 summary["scoring_complete"] = False
         if status.get("dropped_transactions") or status.get("persistence_error"):
+            summary["business_acceptance"] = "unknown"
+            summary["critical_alerts"] = []
             summary["scoring_complete"] = False
             summary.setdefault("evidence_issues", []).append("persistence_unhealthy")
         if summary.get("scoring_complete") is not True:

@@ -381,7 +381,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     if reasons:
         overall["score_status"] = "provisional"
         overall["business_acceptance"] = "unknown" if overall.get("business_acceptance") != "fail" else "fail"
-        if mixed or "clock_discontinuity" in reasons or "row_limit" in reasons:
+        if mixed or any(reason in reasons for reason in ("clock_discontinuity", "row_limit", "dropped_transactions")):
             overall["business_acceptance"] = "unknown"
             overall["critical_alerts"] = []
         overall["scoring_complete"] = False

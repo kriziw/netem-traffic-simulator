@@ -1344,6 +1344,8 @@ class WorkloadController:
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("media_generator_missed_windows")
         if self.dropped_transactions or self.persistence_error:
+            dem["business_acceptance"] = "unknown"
+            dem["critical_alerts"] = []
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("persistence_unhealthy")
         if dem.get("scoring_complete") is not True:

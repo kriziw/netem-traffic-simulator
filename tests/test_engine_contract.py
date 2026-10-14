@@ -231,3 +231,17 @@ def test_idle_single_worker_admits_both_simultaneous_directions():
             scheduler.jobs.task_done()
     assert admitted == {"down": 20, "up": 10}
     assert scheduler.missed_requests == 0
+
+
+def test_lost_measurements_cannot_confirm_a_statistical_business_failure(tmp_path):
+    db = tmp_path / "lost.db"
+    init_db(db)
+    policy = validate_policy({})
+    now = time.time()
+    save_contract(db, {"run_id": "example", "policy": policy, "manifest": {"application_shares": {"erp": 1}}}, now - 10)
+    record_transactions(db, [dict(row("erp", ok=False), timestamp=now - 1)] * 20)
+    assert dem_summary(db, "example", diagnosis=False)["business_acceptance"] == "fail"
+    record_data_loss(db, "example", 100)
+    result = dem_summary(db, "example", diagnosis=False)
+    assert result["business_acceptance"] == "unknown"
+    assert result["critical_alerts"] == []
