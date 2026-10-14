@@ -17,7 +17,7 @@ import time
 from flask import Flask, Response, jsonify, request
 
 from . import __version__
-from .wire import ADDRESS_REQUEST, ECHO_HEADER_BYTES, OBSERVED_SOURCE_HEADER, normalize_address, pack_address
+from .wire import FULL_ECHO_REQUEST, ADDRESS_REQUEST, ECHO_HEADER_BYTES, OBSERVED_SOURCE_HEADER, normalize_address, pack_address
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
@@ -54,7 +54,7 @@ UDP_HEALTH = {"running": False, "errors": 0, "last_error": None}
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "netem-traffic-target", "version": __version__,
-            "capabilities": (["media-echo", "observed-source"] if UDP_HEALTH["running"] else ["observed-source"]),
+            "capabilities": (["media-echo", "media-full-echo-v1", "observed-source"] if UDP_HEALTH["running"] else ["observed-source"]),
             "media_echo": dict(UDP_HEALTH), "time": time.time()}
 
 
@@ -193,6 +193,10 @@ def udp_sink(host: str, port: int, stop_event: threading.Event, sock=None):
                             reply += pack_address(peer[0])
                         except ValueError:
                             pass
+                    if data[ECHO_HEADER_BYTES:ECHO_HEADER_BYTES + 4] == FULL_ECHO_REQUEST:
+                        address = pack_address(peer[0])
+                        reply = data[:ECHO_HEADER_BYTES] + bytes([len(address)]) + address
+                        reply += b"m" * max(0, len(data) - len(reply))
                     if packet_info:
                         sock.sendmsg([reply], ancillary, 0, peer)
                     else:

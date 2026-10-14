@@ -12,7 +12,9 @@ from pathlib import Path
 DIAGNOSIS_COLUMNS = (
     ("cause", "TEXT"), ("wait_ms", "REAL"), ("transfer_ms", "REAL"), ("bytes_up", "INTEGER"),
     ("status_code", "INTEGER"), ("packets_sent", "INTEGER"), ("packets_lost", "INTEGER"), ("egress", "TEXT"),
-    ("udp_jitter_ms", "REAL"), ("started_at", "REAL"), ("operation_id", "TEXT"), ("cancelled", "INTEGER"),
+    ("udp_jitter_ms", "REAL"), ("started_at", "REAL"), ("operation_id", "TEXT"), ("cancelled", "INTEGER"), ("transfer_direction", "TEXT"), ("expected_bytes", "INTEGER"),
+    ("packet_rtt_histogram", "TEXT"), ("packet_variation_histogram", "TEXT"),
+    ("packets_late", "INTEGER"), ("packet_deadline_ms", "REAL"), ("collection_expired", "INTEGER"), ("packet_paths", "TEXT"), ("packet_transitions", "TEXT"),
 )
 TRANSACTION_FIELDS = (
     "timestamp", "run_id", "endpoint_id", "persona", "application", "request_type", "name",
@@ -103,6 +105,14 @@ def init_db(path: Path):
             );
             CREATE INDEX IF NOT EXISTS idx_contract_run ON run_contracts(run_id, effective_at);
             CREATE TABLE IF NOT EXISTS run_health (run_id TEXT PRIMARY KEY, dropped INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS dem_queries (key TEXT PRIMARY KEY, created REAL NOT NULL,
+                arguments TEXT NOT NULL, result TEXT);
+            CREATE TABLE IF NOT EXISTS operation_events (
+                id INTEGER PRIMARY KEY, run_id TEXT, operation_id TEXT, timestamp REAL,
+                kind TEXT, payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_operation_run_time ON operation_events(run_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_operation_id ON operation_events(run_id, operation_id, kind);
             """
         )
         sample_columns = list(conn.execute("PRAGMA table_info(dem_samples)"))
@@ -183,13 +193,37 @@ def record_transaction(path: Path, item: dict):
     record_transactions(path, [item])
 
 
+def record_operation_events(path, items):
+    with connect(path) as conn:
+        conn.executemany("INSERT INTO operation_events(run_id, operation_id, timestamp, kind, payload) VALUES (?, ?, ?, ?, ?)",
+            [(item.get("run_id"), item["operation_id"], item["timestamp"], item["kind"], json.dumps(item)) for item in items])
+
+
+def operation_evidence(path, run_id, since, until):
+    with connect(path) as conn:
+        rows = conn.execute("SELECT kind, count(*) AS n FROM operation_events WHERE run_id=? AND timestamp>=? AND timestamp<? GROUP BY kind",
+                            (run_id, since, until)).fetchall()
+        clocks = conn.execute("SELECT count(*) FROM operation_events WHERE run_id=? AND json_extract(payload, '$.clock_discontinuity')=1",
+                              (run_id,)).fetchone()[0]
+        outstanding = conn.execute("""SELECT count(*) FROM operation_events s
+            WHERE s.run_id=? AND s.kind='started' AND s.timestamp<? AND NOT EXISTS
+            (SELECT 1 FROM operation_events e WHERE e.run_id=s.run_id AND e.operation_id=s.operation_id
+             AND e.kind IN ('completed','cancelled') AND e.timestamp<?)""", (run_id, until, until)).fetchone()[0]
+        overdue = conn.execute("""SELECT count(*) FROM operation_events s WHERE s.run_id=? AND s.kind='deadline_expired'
+            AND s.timestamp<? AND NOT EXISTS (SELECT 1 FROM operation_events e WHERE e.run_id=s.run_id
+            AND e.operation_id=s.operation_id AND e.kind IN ('completed','cancelled') AND e.timestamp<?)""",
+            (run_id, until, until)).fetchone()[0]
+    return {"overdue_at_end": overdue, "events": {row["kind"]: row["n"] for row in rows}, "outstanding_at_end": outstanding,
+            "clock_discontinuities": clocks}
+
+
 def record_transactions(path: Path, items: list[dict]):
     values = [(
         item.get("timestamp", time.time()), item.get("run_id"), item.get("endpoint_id"),
         item.get("persona"), item.get("application"), item.get("request_type", "HTTP"),
         item.get("name", "request"), 1 if item.get("success") else 0,
         item.get("response_time_ms"), int(item.get("response_length") or 0), item.get("error"),
-        *(item.get(name) for name, _ in DIAGNOSIS_COLUMNS),
+        *(json.dumps(item[name]) if (name.endswith("histogram") or name in ("packet_paths", "packet_transitions")) and item.get(name) is not None else item.get(name) for name, _ in DIAGNOSIS_COLUMNS),
     ) for item in items]
     with connect(path) as conn:
         conn.executemany(f"""
@@ -260,12 +294,15 @@ def query_dem_timeseries(path: Path, since: float, limit: int = 2000):
     return [dict(row) for row in rows]
 
 
-def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000, until=None):
+def query_transactions(path: Path, since: float, run_id=None, limit: int = 10000, until=None, intervals=None):
     clauses = ["timestamp >= ?", "timestamp < ?"]
     values = [since, time.time() if until is None else until]
     if run_id:
         clauses.append("run_id = ?")
         values.append(run_id)
+    if intervals:
+        clauses.append("(" + " OR ".join("(timestamp >= ? AND timestamp < ?)" for _ in intervals) + ")")
+        values.extend(value for interval in intervals for value in interval)
     values.append(max(1, min(50000, int(limit))))
     with connect(path) as conn:
         rows = conn.execute(
@@ -312,6 +349,7 @@ def prune_history(path: Path, retention_days: int = 7):
     cutoff = time.time() - retention_days * 86400
     with connect(path) as conn:
         conn.execute("DELETE FROM transactions WHERE timestamp < ?", (cutoff,))
+        conn.execute("DELETE FROM operation_events WHERE timestamp < ?", (cutoff,))
         conn.execute("DELETE FROM dem_samples WHERE timestamp < ?", (cutoff,))
         conn.execute("DELETE FROM runs WHERE ended_at < ?", (cutoff,))
         conn.execute("DELETE FROM run_contracts WHERE run_id NOT IN (SELECT run_id FROM runs)")
@@ -331,7 +369,7 @@ def save_contract(path, run, effective_at=None):
     """Append immutable configuration epochs; never overwrite historical scoring inputs."""
     effective_at = time.time() if effective_at is None else effective_at
     run["contract_epoch"] = effective_at
-    payload = {key: run.get(key) for key in ("contract_epoch", "policy", "manifest", "score_model", "media_mode", "seed", "generation_mode")}
+    payload = {key: run.get(key) for key in ("contract_epoch", "policy", "manifest", "score_model", "media_mode", "seed", "generation_mode", "media_pattern", "media_session_s", "rate_down_mbps", "rate_up_mbps", "traffic_path")}
     payload["dropped_transactions"] = run.get("dropped_transactions", 0)
     with connect(path) as conn:
         conn.execute("INSERT INTO run_contracts(run_id, effective_at, payload) VALUES (?, ?, ?)",

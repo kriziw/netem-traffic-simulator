@@ -15,29 +15,54 @@ class RateScheduler:
     def __init__(self, config):
         self.config = config
         self.jobs = Queue(maxsize=max(1, config["target_users"]))
-        self.next_at = None
+        self.next_at = {}
         self.greenlet = None
         self.offered_bytes = 0
         self.admitted_bytes = 0
         self.missed_requests = 0
+        self.started_bytes = {direction: 0 for direction in ("down", "up")}
+        self.delivered_bytes = dict(self.started_bytes)
+        self.direction_counts = {direction: {"offered_bytes": 0, "admitted_bytes": 0, "missed_requests": 0}
+                                 for direction in self.started_bytes}
+        self.started_at = time.monotonic()
+        self.turn = 0
 
     def offer(self, now):
-        interval = self.chunk_kb * 1024 * 8 / (self.config["paced_mbps"] * 1_000_000)
-        if self.next_at is None:
-            self.next_at = now
-        if now < self.next_at:
-            return self.next_at - now
-        count = math.floor((now - self.next_at) / interval) + 1
-        self.offered_bytes += count * self.chunk_kb * 1024
-        # Never replay an unbounded catch-up burst after a scheduling stall.
-        self.missed_requests += count - 1
-        try:
-            self.jobs.put_nowait((self.chunk_kb, now))
-            self.admitted_bytes += self.chunk_kb * 1024
-        except Full:
-            self.missed_requests += 1
-        self.next_at += count * interval
-        return max(0, self.next_at - now)
+        waits = []
+        directions = list(self.rates().items())
+        self.turn += 1
+        if self.turn % 2 == 0:
+            directions.reverse()
+        for direction, rate in directions:
+            if not rate:
+                continue
+            interval = self.chunk_kb * 1024 * 8 / (rate * 1_000_000)
+            due = self.next_at.setdefault(direction, now)
+            if now >= due:
+                count = math.floor((now - due) / interval) + 1
+                counts = self.direction_counts[direction]
+                counts["offered_bytes"] += count * self.chunk_kb * 1024
+                counts["missed_requests"] += count - 1
+                try:
+                    self.jobs.put_nowait((direction, self.chunk_kb, now))
+                    counts["admitted_bytes"] += self.chunk_kb * 1024
+                except Full:
+                    counts["missed_requests"] += 1
+                self.next_at[direction] += count * interval
+            waits.append(max(0, self.next_at[direction] - now))
+        for key in ("offered_bytes", "admitted_bytes", "missed_requests"):
+            setattr(self, key, sum(counts[key] for counts in self.direction_counts.values()))
+        return min(waits, default=.1)
+
+    def rates(self):
+        return {"down": self.config.get("rate_down_mbps", self.config.get("paced_mbps", 0)) or 0,
+                "up": self.config.get("rate_up_mbps", 0) or 0}
+
+    def dispatched(self, direction, kb):
+        self.started_bytes[direction] += kb * 1024
+
+    def completed(self, direction, payload_bytes):
+        self.delivered_bytes[direction] += max(0, payload_bytes)
 
     def run(self):
         while True:
@@ -53,6 +78,12 @@ class RateScheduler:
         self.missed_requests += self.jobs.qsize()
 
     def snapshot(self):
-        return {"target_mbps": self.config["paced_mbps"], "scope": "download_payload",
+        return {"target_mbps": sum(self.rates().values()), "scope": "directional_payload",
+                "timestamp_monotonic": time.monotonic(),
+                "chunk_bytes": self.chunk_kb * 1024,
+                "tolerance": {"window_seconds": 30, "relative": .05, "quantization_bytes": self.chunk_kb * 1024},
+                "directions": {direction: dict(counts, target_mbps=self.rates()[direction],
+                                  started_bytes=self.started_bytes[direction], delivered_bytes=self.delivered_bytes[direction])
+                               for direction, counts in self.direction_counts.items()},
                 "offered_bytes": self.offered_bytes, "admitted_bytes": self.admitted_bytes,
                 "missed_requests": self.missed_requests, "queued_requests": self.jobs.qsize()}

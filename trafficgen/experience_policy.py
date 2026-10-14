@@ -29,6 +29,7 @@ def default_policy():
         "loss_max_pct": 2.0 if name == "voice" else 1.0 if name == "video" else 0.0,
         "min_down_mbps": 0.0, "min_up_mbps": 0.0,
         "min_sustained_down_mbps": 0.0, "min_sustained_up_mbps": 0.0,
+        "sustained_scope": "application",
     } for name, app in APPLICATIONS.items()}
 
 
@@ -43,6 +44,9 @@ def validate_policy(raw):
             if key in ("critical", "hard_deadline"):
                 if not isinstance(value, bool):
                     raise ValueError(f"{key} must be true or false.")
+            elif key == "sustained_scope":
+                if value not in ("application", "endpoint", "persona", "egress"):
+                    raise ValueError("Sustained throughput scope must be application, endpoint, persona or egress.")
             elif key == "criticality":
                 if not isinstance(value, str) or value not in CRITICALITY_WEIGHTS:
                     raise ValueError("Criticality must be standard, important or critical.")

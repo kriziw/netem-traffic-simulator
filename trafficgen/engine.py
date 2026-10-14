@@ -39,6 +39,8 @@ from .database import save_contract, record_data_loss
 from .experience_policy import load_policy, validate_policy, SCORE_MODEL
 from .workload import application_weights, compile_manifest
 from .rate import RateScheduler
+from .operation import Operation
+from .database import record_operation_events
 from .dem_worker import SNAPSHOT_MAX_AGE_S, fresh_snapshot
 from .offload import offloaded
 from .diagnosis import MediaFailure, classify_failure, response_details, target_finding
@@ -51,7 +53,7 @@ from .profiles import (
     WORKLOAD_PROFILES,
     normalized_mix,
 )
-from .wire import ADDRESS_REQUEST, ECHO_HEADER_BYTES, unpack_address
+from .wire import FULL_ECHO_REQUEST, ADDRESS_REQUEST, ECHO_HEADER_BYTES, unpack_address
 
 
 def weighted_choice(weights: dict) -> str:
@@ -188,11 +190,19 @@ class CorporateUser(HttpUser):
             kwargs.setdefault("timeout", (5, 10))
             kwargs.setdefault("allow_redirects", False)
             context = kwargs.setdefault("context", {})
+            method = str(args[0] if args else kwargs.get("method", "")).upper()
+            url = str(args[1] if len(args) > 1 else kwargs.get("url", ""))
+            if "kb=" in url:
+                from urllib.parse import parse_qs
+                kb = parse_qs(urlsplit(url).query).get("kb", [0])[0]
+                context.update(transfer_direction="down", expected_bytes=int(kb) * 1024)
+            elif isinstance(kwargs.get("data"), bytes):
+                context.update(transfer_direction="up", expected_bytes=len(kwargs["data"]))
             context.setdefault("operation_id", uuid.uuid4().hex)
             context.setdefault("started_at", time.time())
-            pending = self.runtime_config.setdefault("in_flight", {})
-            pending[context["operation_id"]] = dict(context)
-            started = time.monotonic()
+            operation = Operation(self.runtime_config, context, getattr(self.environment, "operation_event", None))
+            started = operation.started
+            cancelled = False
             try:
                 if kwargs.get("catch_response"):
                     return request(*args, **kwargs)
@@ -202,12 +212,13 @@ class CorporateUser(HttpUser):
                         response.failure("Controlled target returned an unexpected redirect.")
                     return response
             except gevent.GreenletExit:
+                cancelled = True
                 self.environment.events.request.fire(request_type="HTTP", name=kwargs.get("name", "cancelled"),
                     response_time=(time.monotonic() - started) * 1000, response_length=0,
                     exception=RuntimeError("Operation cancelled when workload stopped"), context=dict(context, cancelled=True))
                 raise
             finally:
-                pending.pop(context["operation_id"], None)
+                operation.close(cancelled)
         return bounded
 
     def wait_time(self):
@@ -223,6 +234,9 @@ class CorporateUser(HttpUser):
             "endpoint_id": self.endpoint_id,
             "persona": self.persona,
             "application": application,
+            "phase_id": self.runtime_config.get("controller_phase"),
+            "path_id": self.runtime_config.get("traffic_path"),
+            "contract_epoch": self.runtime_config.get("contract_epoch"),
         }
 
     def _paced_bulk(self):
@@ -232,11 +246,20 @@ class CorporateUser(HttpUser):
         environment = getattr(self, "environment", None)
         scheduler = getattr(environment, "rate_scheduler", None)
         if scheduler is not None:
-            kb, offered_at = scheduler.jobs.get()
+            direction, kb, offered_at = scheduler.jobs.get()
+            scheduler.dispatched(direction, kb)
             PACED_STARTED["requests"] += 1
             PACED_IN_FLIGHT["requests"] += 1
             try:
-                self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download", context=self._context("guest_internet"))
+                context = dict(self._context("guest_internet"), transfer_direction=direction, expected_bytes=kb * 1024)
+                if direction == "down":
+                    response = self.client.get(f"/files/download?kb={kb}", name="paced/bulk-download", context=context)
+                    delivered = len(response.content) if response.status_code == 200 else 0
+                else:
+                    response = self.client.post("/files/upload", data=b"u" * (kb * 1024),
+                        name="paced/bulk-upload", context=context, headers={"Content-Type": "application/octet-stream"})
+                    delivered = kb * 1024 if response.status_code == 200 else 0
+                scheduler.completed(direction, delivered)
             finally:
                 PACED_IN_FLIGHT["requests"] -= 1
                 scheduler.jobs.task_done()
@@ -264,6 +287,9 @@ class CorporateUser(HttpUser):
 
     @task
     def corporate_action(self):
+        if self.runtime_config.get("status") == "stopping":
+            gevent.sleep(.05)
+            return
         if self.runtime_config.get("paced_mbps_per_user"):
             if getattr(self, "sparse_user", False):
                 self._app_ot_telemetry()
@@ -369,19 +395,21 @@ class CorporateUser(HttpUser):
             context=self._context("dns"),
         )
 
-    def _udp_burst(self, application, packet_size, packets, interval):
+    def _udp_burst(self, application, packet_size, packets, interval, full_echo=False):
         # Echoed nonce/sequence headers measure received packets and RTT, not
         # the intentional one-second pacing duration or local send success.
         context = self._context(application)
         context.update(operation_id=uuid.uuid4().hex, started_at=time.time())
-        pending = self.runtime_config.setdefault("in_flight", {})
-        pending[context["operation_id"]] = dict(context)
+        operation = Operation(self.runtime_config, context, getattr(self.environment, "operation_event", None))
         cancelled = False
         nonce = uuid.uuid4().bytes[:8]
         sent_times = {}
         received = {}
         received_bytes = {}
         observed = {}
+        packet_paths = {}
+        transitions = []
+        previous_packet = None
         sock = None
         receiver = None
         receive_errors = []
@@ -396,9 +424,10 @@ class CorporateUser(HttpUser):
             sock.settimeout(0.1)
 
             def receive():
+                nonlocal previous_packet
                 while True:
                     try:
-                        data = sock.recv(64)
+                        data = sock.recv(65535)
                     except socket.timeout:
                         continue
                     except OSError as exc:
@@ -410,16 +439,35 @@ class CorporateUser(HttpUser):
                             received_bytes.setdefault(sequence, len(data))
                             received.setdefault(sequence, (time.perf_counter() - sent_times[sequence]) * 1000)
                         # Newer targets append the source address they saw: the WAN that carried this burst.
-                        observed.setdefault("egress", unpack_address(data[ECHO_HEADER_BYTES:]))
+                        if full_echo and len(data) > ECHO_HEADER_BYTES and data[ECHO_HEADER_BYTES] in (4, 16):
+                            length = data[ECHO_HEADER_BYTES]
+                            egress = unpack_address(data[ECHO_HEADER_BYTES + 1:ECHO_HEADER_BYTES + 1 + length])
+                        else:
+                            egress = unpack_address(data[ECHO_HEADER_BYTES:])
+                        observed.setdefault("egress", egress)
+                        if egress:
+                            stamp = context["started_at"] + time.monotonic() - operation.started
+                            entry = packet_paths.setdefault(egress, {"first_observed_at": stamp, "last_observed_at": stamp, "packets": 0})
+                            entry.update(last_observed_at=stamp, packets=entry["packets"] + 1)
+                            last_paths = getattr(self, "last_packet_paths", {})
+                            previous_packet = last_paths.get(application)
+                            if previous_packet and previous_packet["egress"] != egress and len(transitions) < 32:
+                                transitions.append({"from": previous_packet["egress"], "to": egress,
+                                    "earliest_at": previous_packet["at"], "latest_at": stamp,
+                                    "basis": "target-observed source on adjacent received packets; reordering can mimic a switch"})
+                            last_paths[application] = {"egress": egress, "at": stamp}
+                            self.last_packet_paths = last_paths
+
 
             receiver = gevent.spawn(receive)
+            send_origin = time.perf_counter()
             for sequence in range(packets):
-                payload = (nonce + struct.pack("!I", sequence) + ADDRESS_REQUEST
+                payload = (nonce + struct.pack("!I", sequence) + (FULL_ECHO_REQUEST if full_echo else ADDRESS_REQUEST)
                            + b"m" * (packet_size - ECHO_HEADER_BYTES - len(ADDRESS_REQUEST)))
                 sent_at = time.perf_counter()
                 sock.send(payload)
                 sent_times[sequence] = sent_at
-                gevent.sleep(interval)
+                gevent.sleep(max(0, send_origin + (sequence + 1) * interval - time.perf_counter()))
             targets = self.runtime_config.get("policy", {}).get(application, {})
             collection_s = max(.5, min(10.0, targets.get("deadline_ms", 500) / 1000 * 2))
             deadline = time.perf_counter() + collection_s
@@ -438,7 +486,7 @@ class CorporateUser(HttpUser):
         except OSError as exc:
             error = exc
         finally:
-            pending.pop(context["operation_id"], None)
+            operation.close(cancelled)
             if receiver is not None:
                 receiver.kill()
             if sock is not None:
@@ -448,7 +496,14 @@ class CorporateUser(HttpUser):
         variations = [abs(received[sequence] - received[sequence - 1])
                       for sequence in sorted(received) if sequence - 1 in received]
         from .dem import percentile
-        context.update(packets_sent=len(sent_times), packets_lost=len(sent_times) - len(received),
+        from .packet_metrics import histogram
+        packet_deadline = self.runtime_config.get("policy", {}).get(application, {}).get("deadline_ms", 500)
+        context.update(packet_paths=packet_paths, packet_transitions=transitions,
+                       packet_rtt_histogram=histogram(received.values()),
+                       packet_variation_histogram=histogram(variations),
+                       packets_late=sum(rtt > packet_deadline for rtt in received.values()),
+                       packet_deadline_ms=packet_deadline, collection_expired=bool(len(received) < len(sent_times)),
+                       packets_sent=len(sent_times), packets_lost=len(sent_times) - len(received),
                        bytes_up=len(sent_times) * packet_size, egress=observed.get("egress"),
                        udp_jitter_ms=percentile(variations, 0.95) if variations else None)
         self.environment.events.request.fire(
@@ -463,13 +518,34 @@ class CorporateUser(HttpUser):
         if cancelled:
             raise gevent.GreenletExit
 
+    def _media_action(self, application, packet_size, packets, interval, camera=False):
+        if self.runtime_config.get("media_pattern") != "sustained":
+            return self._udp_burst(application, packet_size, packets, interval)
+        from gevent.pool import Group
+        group = Group()
+        origin = time.monotonic()
+        try:
+            for second in range(self.runtime_config.get("media_session_s", 30)):
+                if self.runtime_config.get("status") == "stopping":
+                    break
+                # At most twelve one-second windows, including bounded reply collection.
+                # Collection never serializes the next second's sending schedule.
+                if len(group) < 12:
+                    group.spawn(self._udp_burst, application, packet_size, packets, interval, not camera)
+                else:
+                    self.runtime_config["media_missed_windows"] = self.runtime_config.get("media_missed_windows", 0) + 1
+                gevent.sleep(max(0, origin + second + 1 - time.monotonic()))
+            group.join(timeout=11)
+        finally:
+            group.kill()
+
     def _app_voice(self):
         # Roughly 64 kbit/s payload rate for one second.
-        self._udp_burst("voice", packet_size=160, packets=50, interval=0.02)
+        self._media_action("voice", 160, 50, .02)
 
     def _app_video(self):
         # Roughly 1.9 Mbit/s payload rate for one second.
-        self._udp_burst("video", packet_size=1200, packets=200, interval=0.005)
+        self._media_action("video", 1200, 200, .005)
 
     # Industry applications reuse the target's bounded endpoints; what makes them
     # distinct is their size, frequency and thresholds in the catalog.
@@ -534,6 +610,8 @@ class CorporateUser(HttpUser):
             self._download("core_banking", "banking/screen", "/web/page", [24, 48])
 
     def _app_cctv_backhaul(self):
+        if self.runtime_config.get("media_pattern") == "sustained":
+            return self._media_action("cctv_backhaul", 1200, 200, .005, camera=True)
         self._upload("cctv_backhaul", "cctv/upload", "/backup/upload", [1024, 2048, 3072, 4096])
 
     def _app_guest_internet(self):
@@ -592,15 +670,19 @@ class WorkloadController:
                         batch.append(self.transaction_queue.get_nowait())
                     except queue.Empty:
                         break
-                transactions = [entry for entry in batch if "_flush_event" not in entry]
+                transactions = [entry for entry in batch if "_flush_event" not in entry and "_operation_event" not in entry]
                 started = time.perf_counter()
+                events = [entry["_operation_event"] for entry in batch if "_operation_event" in entry]
+                if events:
+                    offloaded(record_operation_events, self.settings.database_path, events)
                 if transactions:
                     offloaded(record_transactions, self.settings.database_path, transactions)
                 self._note_timing("write_ms", (time.perf_counter() - started) * 1000.0)
             except Exception as exc:
                 self.persistence_error = str(exc)[:240]
-                transactions = [entry for entry in batch if "_flush_event" not in entry]
-                self.dropped_transactions += len(transactions)
+                transactions = [entry for entry in batch if "_flush_event" not in entry and "_operation_event" not in entry]
+                self.dropped_transactions += len([entry for entry in batch if "_flush_event" not in entry])
+                transactions += [entry["_operation_event"] for entry in batch if "_operation_event" in entry]
                 for entry in batch:
                     if "_flush_event" in entry:
                         entry["error"] = self.persistence_error
@@ -616,6 +698,32 @@ class WorkloadController:
                     if "_flush_event" in entry:
                         entry["_flush_event"].set()
                     self.transaction_queue.task_done()
+
+    def query_dem(self, database_path=None, **arguments):
+        # Explicit test/development opt-out retains deterministic in-process fixtures.
+        if os.environ.get("TRAFFICGEN_DEM_WORKER") == "0":
+            return offloaded(dem_summary, self.settings.database_path, **arguments)
+        from .aggregation import enqueue, read_result
+        key = offloaded(enqueue, self.settings.database_path, arguments)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            result = offloaded(read_result, self.settings.database_path, key)
+            if result is not None:
+                if "error" in result:
+                    raise ValueError(result["error"])
+                return result["dem"]
+            gevent.sleep(.05)
+        from .dem import summarize_rows
+        return dict(summarize_rows([]), applications={}, personas={}, endpoints={},
+                    diagnosis={"findings": [], "egress": {}}, run_id=arguments.get("run_id"),
+                    timestamp=time.time(), evidence_issues=["aggregation_unavailable"], truncated=False)
+
+    def _operation_event(self, event):
+        try:
+            self.transaction_queue.put_nowait({"_operation_event": event})
+        except queue.Full:
+            self.dropped_transactions += 1
+            gevent.spawn(offloaded, record_data_loss, self.settings.database_path, event.get("run_id"), 1)
 
     def flush_completed(self):
         """FIFO persistence barrier: future completions cannot postpone a phase query."""
@@ -640,7 +748,7 @@ class WorkloadController:
                 snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"))
                 if snapshot is None:
                     # The worker has not published this run recently: sample a DEM computed here, off the event loop.
-                    summary = offloaded(dem_summary, self.settings.database_path, run_id=run["run_id"],
+                    summary = self.query_dem(run_id=run["run_id"],
                                         window_seconds=60, diagnosis=False)
                 elif snapshot["created"] == self.last_sampled:
                     continue
@@ -689,6 +797,7 @@ class WorkloadController:
             "endpoint_id": ctx.get("endpoint_id"),
             "persona": ctx.get("persona"),
             "application": ctx.get("application"),
+            "transfer_direction": ctx.get("transfer_direction"), "expected_bytes": ctx.get("expected_bytes"),
             "started_at": ctx.get("started_at"), "operation_id": ctx.get("operation_id"), "cancelled": bool(ctx.get("cancelled")),
             "request_type": request_type,
             "name": name,
@@ -705,6 +814,11 @@ class WorkloadController:
             "packets_lost": ctx.get("packets_lost"),
             "udp_jitter_ms": ctx.get("udp_jitter_ms"),
             "egress": ctx.get("egress") or details["egress"],
+            "packet_paths": ctx.get("packet_paths"), "packet_transitions": ctx.get("packet_transitions"),
+            "packet_rtt_histogram": ctx.get("packet_rtt_histogram"),
+            "packet_variation_histogram": ctx.get("packet_variation_histogram"),
+            "packets_late": ctx.get("packets_late"), "packet_deadline_ms": ctx.get("packet_deadline_ms"),
+            "collection_expired": ctx.get("collection_expired"),
         }
         self.counters["requests"] += 1
         self.counters["failures"] += 0 if exception is None else 1
@@ -749,7 +863,13 @@ class WorkloadController:
     def _loop_monitor(self):
         """How late this process wakes after a short sleep. Every workload user, the HTTP server and the UDP echo run
         on this loop, so a late wake-up is felt by all of them at once."""
+        offset = time.time() - time.monotonic()
         while not self.stop_event.is_set():
+            current = time.time() - time.monotonic()
+            if abs(current - offset) > 1 and self.run:
+                self._operation_event({"operation_id": uuid.uuid4().hex, "run_id": self.run["run_id"],
+                    "timestamp": time.time(), "kind": "clock_discontinuity", "clock_discontinuity": True})
+            offset = current
             started = time.perf_counter()
             gevent.sleep(LOOP_INTERVAL_S)
             lag = max(0.0, (time.perf_counter() - started - LOOP_INTERVAL_S) * 1000.0)
@@ -800,7 +920,7 @@ class WorkloadController:
             cached = self.last_live_dem
             if cached and cached[0] == run["run_id"] and 0 <= time.monotonic() - cached[1] < 2:
                 return copy.deepcopy(cached[2])
-            result = offloaded(dem_summary, self.settings.database_path, run_id=run["run_id"], window_seconds=60,
+            result = self.query_dem(run_id=run["run_id"], window_seconds=60,
                                media_mode=run.get("media_mode", "strict"))
             self.last_live_dem = (run["run_id"], time.monotonic(), copy.deepcopy(result))
             return result
@@ -808,7 +928,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed", "rate_down_mbps", "rate_up_mbps", "completion_grace_s", "media_pattern", "media_session_s"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -823,22 +943,31 @@ class WorkloadController:
         pattern = str(raw.get("pattern") or profile["pattern"])
         if pattern not in PATTERNS:
             raise ValueError("Unknown traffic pattern.")
+        media_pattern = raw.get("media_pattern", "bursts")
+        if media_pattern not in ("bursts", "sustained"):
+            raise ValueError("media_pattern must be bursts or sustained.")
         media_mode = validated_media_mode(raw.get("media_mode", "strict"))
         label = raw.get("label")
         if label is not None and (not isinstance(label, str) or len(label.strip()) > 120):
             raise ValueError("label must be text of at most 120 characters.")
 
-        generation_mode = raw.get("generation_mode", "rate" if raw.get("paced_mbps") else "users")
+        directional = any(key in raw for key in ("rate_down_mbps", "rate_up_mbps"))
+        if directional and "paced_mbps" in raw:
+            raise ValueError("Use directional rates or paced_mbps, not both.")
+        generation_mode = raw.get("generation_mode", "rate" if directional or raw.get("paced_mbps") else "users")
         if generation_mode not in ("users", "rate"):
             raise ValueError("generation_mode must be users or rate.")
-        if generation_mode == "rate" and not raw.get("paced_mbps"):
-            raise ValueError("Rate mode requires paced_mbps.")
-        if generation_mode == "users" and raw.get("paced_mbps"):
-            raise ValueError("paced_mbps requires rate mode.")
+        rate_down = bounded_number(raw.get("rate_down_mbps", 0), "rate_down_mbps", 0, 1000)
+        rate_up = bounded_number(raw.get("rate_up_mbps", 0), "rate_up_mbps", 0, 1000)
         paced_mbps = raw.get("paced_mbps")
         if paced_mbps is not None:
-            # Calibration: every user paces bounded downloads to this aggregate rate; the persona mix is not used.
-            paced_mbps = bounded_number(paced_mbps, "paced_mbps", 0.1, 1000)
+            rate_down = bounded_number(paced_mbps, "paced_mbps", 0.1, 1000)
+        total_rate = rate_down + rate_up
+        if generation_mode == "rate" and total_rate <= 0:
+            raise ValueError("Rate mode requires a positive directional rate or paced_mbps.")
+        if generation_mode == "users" and total_rate:
+            raise ValueError("Payload rates require rate mode.")
+        paced_mbps = total_rate or None
         sparse_share = raw.get("sparse_share")
         if sparse_share is not None and paced_mbps is None:
             raise ValueError("sparse_share needs paced_mbps.")
@@ -880,13 +1009,17 @@ class WorkloadController:
             "personas": personas,
             "applications": applications,
             "media_mode": media_mode,
+            "media_pattern": media_pattern,
+            "media_session_s": bounded_number(raw.get("media_session_s", 30), "media_session_s", 1, 300, integer=True),
             # Describes what the run represents, e.g. the site NetEm modelled it on.
             "label": (label or "").strip() or None,
+            "completion_grace_s": bounded_number(raw.get("completion_grace_s", 2), "completion_grace_s", 0, 10),
             "generation_mode": generation_mode,
             "seed": bounded_number(raw.get("seed", random.randrange(2**31)), "seed", 0, 2**31 - 1, integer=True),
             "policy": validate_policy(raw["experience_policy"]) if "experience_policy" in raw else load_policy(self.settings.database_path),
             "score_model": SCORE_MODEL,
             "paced_mbps": paced_mbps,
+            "rate_down_mbps": rate_down, "rate_up_mbps": rate_up,
             # Exactly this many users send UDP bursts instead of downloads; only the others share the rate.
             "sparse_slots": round(users * sparse_share),
             "sparse_claimed": 0,
@@ -921,6 +1054,7 @@ class WorkloadController:
                 },
             )
             environment = Environment(user_classes=[user_class])
+            environment.operation_event = self._operation_event
             environment.events.request.add_listener(self._record_request)
             environment.events.spawning_complete.add_listener(self._reconcile_population)
             runner = environment.create_local_runner()
@@ -1159,9 +1293,12 @@ class WorkloadController:
             self.pattern_greenlet = None
         if self.rate_scheduler:
             self.rate_scheduler.stop()
+        grace_end = time.monotonic() + self.run.get("completion_grace_s", 2.0)
+        while self.run.get("in_flight") and time.monotonic() < grace_end:
+            gevent.sleep(.02)
         if runner:
             runner.quit()
-        self.transaction_queue.join()
+        gevent.with_timeout(5, self.flush_completed)
         finish_run(self.settings.database_path, run_id, "stopped")
         with self.lock:
             self.run["status"] = "stopped"
@@ -1182,18 +1319,21 @@ class WorkloadController:
                 "status": "idle",
                 "run": None,
                 "users": 0,
-                "dem": offloaded(dem_summary, self.settings.database_path, window_seconds=60),
+                "dem": self.query_dem(window_seconds=60),
             }
         started = time.perf_counter()
         dem = self._live_dem(run)
         if self.rate_scheduler:
             run["rate_demand"] = self.rate_scheduler.snapshot()
         pending = run.pop("in_flight", {})
-        dem["in_flight"] = {"requests": len(pending), "oldest_age_s": max((time.time() - item["started_at"] for item in pending.values()), default=0)}
-        overdue = [item for item in pending.values() if (time.time() - item["started_at"]) * 1000 > run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400)]
+        dem["in_flight"] = {"requests": len(pending), "oldest_age_s": max((time.monotonic() - item.get("started_monotonic", time.monotonic()) for item in pending.values()), default=0)}
+        overdue = [item for item in pending.values() if (time.monotonic() - item.get("started_monotonic", time.monotonic())) * 1000 > run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400)]
         if overdue:
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("outstanding_overdue_operations")
+        if run.get("media_missed_windows"):
+            dem["scoring_complete"] = False
+            dem.setdefault("evidence_issues", []).append("media_generator_missed_windows")
         if self.dropped_transactions or self.persistence_error:
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("persistence_unhealthy")

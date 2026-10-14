@@ -516,7 +516,7 @@ def create_app():
             "dem.html",
             page="dem",
             status=status,
-            summary=with_target_finding(dem_summary(settings.database_path, run_id=run_id, window_seconds=60, media_mode=media_mode), status),
+            summary=with_target_finding(status["dem"], status),
             runs=recent_runs(settings.database_path, 12),
             experience_policy=load_policy(settings.database_path),
             experience_applications=profile_payload()["applications"],
@@ -571,7 +571,7 @@ def create_app():
             {
                 "timestamp": time.time(),
                 "users": status.get("users", 0),
-                "summary": with_target_finding(dem_summary(
+                "summary": with_target_finding(app.config["TRAFFICGEN_CONTROLLER"].query_dem(
                     settings.database_path,
                     run_id=run_id,
                     window_seconds=min(3600, minutes * 60),
@@ -1043,10 +1043,11 @@ def create_app():
                 gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
             except gevent.Timeout:
                 raise ValueError("Persistence has not caught up to the requested interval.") from None
-        summary = offloaded(dem_summary, settings.database_path, run_id=run_id,
+        summary = app.config["TRAFFICGEN_CONTROLLER"].query_dem(run_id=run_id,
                             window_seconds=window, media_mode=run.get("media_mode", "strict"),
                             since=float(since) if since is not None else None,
-                            until=float(until) if until is not None else None)
+                            until=float(until) if until is not None else None,
+                            intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
         if since is None and run_id == run.get("run_id"):
             live = status.get("dem") or {}
             summary["in_flight"] = live.get("in_flight")

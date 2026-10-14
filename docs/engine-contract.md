@@ -52,8 +52,10 @@ separate. UDP operation latency is the mean RTT of delivered echo packets; its P
 is a percentile of burst measurements, not packet P95 or perceptual MOS. RTT
 variation is not one-way jitter. Collection is bounded between 0.5 and 10 seconds,
 based on the configured deadline. Packets absent at collection expiry are not proof
-of physical loss rather than excessive delay. Real media codecs/session models and
-packet-latency histograms remain a separate modelling extension.
+of physical loss rather than excessive delay. Packet RTT and adjacent-sequence RTT-variation histograms are now persisted and merged;
+reported histogram percentiles are bucket upper bounds. Late replies are counted
+separately from packets missing at collection expiry. Physical loss cannot be
+distinguished from a reply arriving after that finite observation boundary.
 
 ## Generation
 
@@ -78,3 +80,42 @@ row caps, future timestamps, cancellation, persona counts and bounded rate deman
 Linux CI remains required for routing, service, installer and socket tests. Lab
 acceptance must measure achieved rate, packet timing, generator/target CPU and
 observer overhead together; configuration alone is not proof of delivered capacity.
+
+## Completion of the remaining measurement contract
+
+- Directional rate mode accepts `rate_down_mbps` and `rate_up_mbps`; legacy
+  `paced_mbps` remains download-only input. Each direction has an independent
+  arrival budget, with offered, admitted, dispatched and delivered payload counters.
+  The admission tolerance is 5% plus one 256 KiB quantum over a 30-second window.
+  This is a measurement tolerance, not a promise that an overloaded generator meets it.
+- `media_pattern: sustained` creates one-second synthetic packet windows throughout
+  `media_session_s` (default 30, range 1–300). Reply collection overlaps the next
+  sending window and concurrency is bounded. Voice/video request equal-size echoes;
+  cameras send synthetic upstream UDP payload. `bursts` retains compatibility.
+  Neither mode claims a real codec, perceptual MOS or a DNS-protocol implementation.
+- Operation starts, deadline expiry, completion and cancellation are persisted with
+  run, operation, controller phase, configuration epoch and path identity. A stop
+  blocks new actions and allows `completion_grace_s` (default 2, maximum 10) before
+  cancellation. Event loss invalidates evidence. Historical queries expose outstanding
+  and overdue work at their end boundary.
+- Exact queries accept an ordered JSON `intervals` list of up to 64 disjoint active
+  segments inside `since`/`until`. Paused completions are excluded, and sustained
+  rates use total active duration. Attribution remains by completion time; crossing
+  operations and overdue-at-boundary counts remain explicit.
+- `sustained_scope` selects application, endpoint, persona or egress budgets.
+  Per-member compliance uses the weakest member; application utility averages member
+  utility. Missing identities invalidate coverage. Per-operation throughput uses
+  `min_down_mbps`/`min_up_mbps`. Explicit direction/expected size preserves failed
+  transfers as zero delivery. Application scope is the whole site's application budget.
+- Worker snapshots use monotonic freshness plus wall-clock consistency. Clock steps
+  detected during execution invalidate the affected run's reproducibility.
+- All live, page, custom-window and fallback aggregation requests use the supervised
+  process. Eight pending requests and short cached results bound observer work;
+  identical queries deduplicate. Unavailable aggregation returns incomplete evidence.
+  Only the explicit `TRAFFICGEN_DEM_WORKER=0` development/test option computes locally.
+- Packet source-address transitions include the bounds between adjacent observations.
+  These are packet observations, not appliance control-plane switch timestamps;
+  reordering, missing packets and NAT can widen or invalidate the inference.
+
+The complete deployed topology/kernel/offload/capacity acceptance matrix still requires
+an identified disposable lab. Passing unit and namespace tests does not certify it.

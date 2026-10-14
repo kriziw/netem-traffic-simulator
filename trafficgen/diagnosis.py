@@ -242,7 +242,7 @@ def egress_breakdown(rows, scoring_policy=None, window_seconds=60):
         groups[row.get("egress") or UNKNOWN_EGRESS].append(row)
     result = {}
     for address, items in sorted(groups.items()):
-        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds, scope="subset")
+        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds, scope="egress")
         apps = defaultdict(lambda: [0, 0, []])
         for row in items:
             counts = apps[row.get("application") or "other"]
@@ -312,7 +312,7 @@ def _media_findings(rows, applications, media_mode):
             findings.append(_finding(
                 "media_no_reply", "bad",
                 f"{_label(app)}: {len(silent)} of {media['bursts']} bursts got no reply",
-                "No echo came back within 0.5 s. Either the path dropped every packet, UDP replies are "
+                "No echo came back before the configured bounded collection expired. Either the path dropped every packet, UDP replies are "
                 "blocked, or the target answers from a different address than the one contacted "
                 "(the appliance then drops the reply).",
                 silent, [app]))

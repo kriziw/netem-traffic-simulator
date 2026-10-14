@@ -105,18 +105,20 @@ def quality_components(rows, targets, window_seconds=60):
     for direction, field in (("down", "response_length"), ("up", "bytes_up")):
         sustained_minimum = targets.get(f"min_sustained_{direction}_mbps", 0)
         if sustained_minimum > 0:
-            transfers = [row for row in rows if (row.get(field) or 0) >= 65536]
+            transfers = [row for row in rows if (row.get(field) or 0) >= 65536 or
+                         (row.get("transfer_direction") == direction and (row.get("expected_bytes") or 0) >= 65536)]
             if not transfers:
                 missing.append(f"sustained_{direction}")
             else:
-                rate = sum(row[field] for row in transfers if row["success"]) * 8 / (window_seconds * 1000000)
+                rate = sum(row.get(field) or 0 for row in transfers if row["success"]) * 8 / (window_seconds * 1000000)
                 evidence[f"sustained_{direction}_mbps"] = round(rate, 3)
                 # A missed explicit minimum cannot label the application good.
                 components[f"sustained_{direction}"] = 100.0 if rate >= sustained_minimum else 100 * rate / sustained_minimum
         minimum = targets[f"min_{direction}_mbps"]
         if minimum <= 0:
             continue
-        transfers = [row for row in rows if (row.get(field) or 0) >= 65536]
+        transfers = [row for row in rows if (row.get(field) or 0) >= 65536 or
+                         (row.get("transfer_direction") == direction and (row.get("expected_bytes") or 0) >= 65536)]
         known = [row for row in transfers if row.get("response_time_ms") and row["response_time_ms"] > 0]
         if not known or len(known) != len(transfers):
             missing.append(f"throughput_{direction}")
@@ -124,6 +126,29 @@ def quality_components(rows, targets, window_seconds=60):
             rates = [row[field] * 8 / (row["response_time_ms"] * 1000) if row["success"] else 0 for row in known]
             evidence[f"transfer_{direction}_p05_mbps"] = round(percentile(rates, .05), 3)
             components[f"throughput_{direction}"] = min(100.0, 100 * percentile(rates, .05) / minimum)
+    if bursts:
+        import json
+        from .packet_metrics import merge, percentile as packet_percentile
+        for column, metric in (("packet_rtt_histogram", "packet_rtt"), ("packet_variation_histogram", "packet_rtt_variation")):
+            histograms = [json.loads(row[column]) if isinstance(row.get(column), str) else row.get(column) for row in bursts]
+            if all(item is not None for item in histograms):
+                combined = merge(histograms)
+                evidence[metric + "_histogram"] = combined
+                evidence[metric + "_p95_upper_ms"] = packet_percentile(combined, .95)
+        evidence["packets_late"] = sum(row.get("packets_late") or 0 for row in bursts)
+        evidence["packets_missing_at_collection_end"] = sum(row.get("packets_lost") or 0 for row in bursts)
+        rtts = evidence.get("packet_rtt_histogram")
+        if rtts and all(row.get("packets_late") is not None for row in bursts):
+            received = sum(rtts.values())
+            late = evidence["packets_late"]
+            components["deadline"] = (100 * (received - late) / received if targets.get("hard_deadline") else
+                sum(count * target_credit(float(bound), targets["deadline_ms"]) for bound, count in rtts.items()) / received)
+            evidence["deadline_misses"] = late
+            evidence["deadline_basis"] = "received packets; histogram upper bounds for elastic credit"
+        evidence["packet_loss_basis"] = "not received before bounded collection expiry; physical loss is not distinguishable from later arrival"
+        if evidence.get("packet_rtt_variation_p95_upper_ms") is not None and targets["jitter_max_ms"] > 0:
+            evidence["udp_rtt_variation_p95_ms"] = evidence["packet_rtt_variation_p95_upper_ms"]
+            components["udp_rtt_variation"] = target_credit(evidence["udp_rtt_variation_p95_ms"], targets["jitter_max_ms"])
     return components, evidence, missing
 
 
@@ -160,10 +185,30 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         targets = dict(policy.get(application, {"critical": True, "deadline_ms": 400,
                             "jitter_max_ms": 0, "loss_max_pct": 0,
                             "min_down_mbps": 0, "min_up_mbps": 0}))
-        if scope != "application":
+        if scope != targets.get("sustained_scope", "application") and scope != "application":
             # Site-wide sustained targets are not per-endpoint/persona/egress requirements.
             targets.update(min_sustained_down_mbps=0, min_sustained_up_mbps=0)
+        scoped_target = targets.get("sustained_scope", "application")
         components, evidence, missing = quality_components(rows, targets, window_seconds)
+        if scope == "application" and scoped_target != "application":
+            field = {"endpoint": "endpoint_id", "persona": "persona", "egress": "egress"}[scoped_target]
+            groups = defaultdict(list)
+            for row in rows:
+                groups[row.get(field)].append(row)
+            if None in groups:
+                missing.append("throughput_scope_identity")
+            member_quality = [quality_components(items, targets, window_seconds) for items in groups.values()]
+            evidence["sustained_scope"] = scoped_target
+            evidence["scope_members"] = len(groups)
+            for direction in ("down", "up"):
+                key = "sustained_" + direction
+                if targets.get("min_" + key + "_mbps", 0):
+                    values = [item[0][key] for item in member_quality if key in item[0]]
+                    if len(values) != len(groups):
+                        missing.append(key + "_scope_coverage")
+                    components[key] = statistics.mean(values) if values else 0
+                    evidence[key + "_mbps"] = min((item[1].get(key + "_mbps", 0) for item in member_quality), default=0)
+                    evidence[key + "_basis"] = "minimum member goodput for compliance; mean member utility for score"
         quality_score = min(components.values(), default=100)
         loss_accounted = sum(not row["success"] and (row.get("packets_sent") or 0) > 0
                              and row.get("packets_lost") == row["packets_sent"] for row in rows)
@@ -242,7 +287,7 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
     }
 
 
-def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="strict", diagnosis=True, since=None, until=None):
+def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="strict", diagnosis=True, since=None, until=None, intervals=None):
     # Imported here: diagnosis builds on this module's summaries.
     from .diagnosis import application_detail, diagnose
 
@@ -251,14 +296,39 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     start = end - max(10, min(3600, float(window_seconds))) if since is None else float(since)
     if not math.isfinite(start) or not math.isfinite(end) or start >= end or end > now + .1 or end - start > 86400:
         raise ValueError("DEM requires a finite past interval, start < end, at most 24 hours.")
-    window_seconds = end - start
-    rows = query_transactions(database_path, start, run_id=run_id, limit=50000, until=end)
+    if intervals is not None:
+        if not isinstance(intervals, list) or not 1 <= len(intervals) <= 64:
+            raise ValueError("DEM intervals must contain 1 to 64 active segments.")
+        previous = start
+        for segment in intervals:
+            if not isinstance(segment, (list, tuple)) or len(segment) != 2:
+                raise ValueError("Each DEM interval needs start and end.")
+            left, right = segment
+            if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in segment):
+                raise ValueError("DEM interval bounds must be finite numbers.")
+            if left < previous or left >= right or right > end:
+                raise ValueError("DEM intervals must be ordered, disjoint and inside the requested bounds.")
+            previous = right
+    window_seconds = sum(right - left for left, right in intervals) if intervals else end - start
+    rows = query_transactions(database_path, start, run_id=run_id, limit=50000, until=end, intervals=intervals)
     contract, mixed = scoring_contract(database_path, run_id, start, end)
     policy = contract["policy"] if contract else load_policy(database_path)
     media_mode = (contract or {}).get("media_mode") or media_mode
     shares = contract["manifest"]["application_shares"] if contract else None
     overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds, application_shares=shares)
+    from .database import operation_evidence
+    lifecycle = operation_evidence(database_path, run_id, start, end)
+    if intervals:
+        evidence = [operation_evidence(database_path, run_id, left, right) for left, right in intervals]
+        lifecycle = dict(evidence[-1])
+        lifecycle["events"] = {kind: sum(item["events"].get(kind, 0) for item in evidence)
+                               for kind in {kind for item in evidence for kind in item["events"]}}
+        lifecycle["clock_discontinuities"] = sum(item["clock_discontinuities"] for item in evidence)
     reasons = []
+    if lifecycle["overdue_at_end"]:
+        reasons.append("outstanding_overdue_operations")
+    if lifecycle["clock_discontinuities"]:
+        reasons.append("clock_discontinuity")
     if len(rows) >= 50000:
         reasons.append("row_limit")
     if mixed:
@@ -296,7 +366,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         for key, items in by_app.items():
             app_summary[key].update(application_detail(key, items, policy))
     persona_summary = {
-        key: summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="subset",
+        key: summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="persona",
                             application_shares=(contract or {}).get("manifest", {}).get("persona_applications", {}).get(key))
         for key, items in sorted(by_persona.items())
     }
@@ -304,7 +374,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     for key, items in by_endpoint.items():
         if key == "unknown":
             continue
-        summary = summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="subset",
+        summary = summarize_rows(items, policy=policy, window_seconds=window_seconds, scope="endpoint",
                                  application_shares=(contract or {}).get("manifest", {}).get("persona_applications", {}).get(endpoint_persona.get(key)))
         summary["endpoint_id"] = key
         summary["persona"] = endpoint_persona.get(key, "unknown")
@@ -326,11 +396,12 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         failures_per_second = 0.0
 
     result = {
+        "operation_lifecycle": lifecycle,
         "truncated": len(rows) >= 50000,
         "timestamp": now, "run_id": run_id, "since": start, "until": end,
         "evidence_issues": reasons, "policy_source": "run_snapshot" if contract else "current_policy_regrade",
         "score_model": SCORE_MODEL, "regraded": not bool(contract), "contract_epoch": (contract or {}).get("contract_epoch"),
-        "window_seconds": window_seconds,
+        "window_seconds": window_seconds, "intervals": intervals,
         **overall,
         "requests_per_second": round(rps, 3),
         "failures_per_second": round(failures_per_second, 3),
@@ -338,6 +409,16 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         "personas": persona_summary,
         "endpoints": endpoint_summary,
     }
+    import json
+    transitions = []
+    for row in rows:
+        packet_transitions = row.get("packet_transitions")
+        if packet_transitions:
+            for item in json.loads(packet_transitions) if isinstance(packet_transitions, str) else packet_transitions:
+                if start <= item["latest_at"] < end and (not intervals or any(left <= item["latest_at"] < right for left, right in intervals)):
+                    transitions.append(dict(item, application=row["application"], endpoint_id=row.get("endpoint_id")))
+    result["packet_egress_transitions"] = transitions[-1000:]
+    result["packet_egress_transitions_truncated"] = len(transitions) > 1000
     if diagnosis:
         result["diagnosis"] = diagnose(rows, app_summary, media_mode, scoring_policy=policy, window_seconds=window_seconds)
         for app, item in app_summary.items():
@@ -348,5 +429,10 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
                     "applications": [app], "affected": item["requests"], "by_egress": {"unknown": item["requests"]},
                     "evidence": {"targets": item["experience_targets"], "quality": item["quality"],
                                  "components": item["score_components"]}})
+        for finding in result["diagnosis"]["findings"]:
+            finding["observation"] = {"run_id": run_id, "since": start, "until": end,
+                                      "path": (contract or {}).get("traffic_path")}
+            finding["confidence"] = "observed symptom"
+            finding["causality"] = "cause requires independent path/target evidence"
         result["interactive_p95_ms"] = result["diagnosis"]["interactive_p95_ms"]
     return result
