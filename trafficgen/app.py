@@ -349,6 +349,7 @@ def create_app():
 
     def execute_system_action(raw):
         action = raw.get("action", "")
+        job = None
         host_available(require_idle=action in ("route", "clear_route", "install_update", "configure_interface", "forget_interface", "target_install"))
         if action == "save_appliance":
             policy = maintenance.read_json(maintenance.ADMIN_DIR / "policy.json", {})
@@ -390,8 +391,9 @@ def create_app():
                 payload = remote_target.validate_config(dict(raw), policy.get("management_interface", "eth0"))
             elif action == "target_install":
                 payload = {"tag": raw.get("tag", "")}
-            maintenance.enqueue(settings, action, payload)
-        return {"message": "Task accepted. Follow its progress below."}
+            job = maintenance.enqueue(settings, action, payload)
+        return {"message": "Task accepted. Follow its progress below.",
+                "job_id": job.get("id") if isinstance(job, dict) else None}
 
     @app.get("/settings/system")
     @admin_required
@@ -407,10 +409,15 @@ def create_app():
     @app.post("/settings/system/action")
     @admin_required
     def system_action():
+        inline = request.accept_mimetypes.best == "application/json"
         try:
-            execute_system_action(request.form)
+            result = execute_system_action(request.form)
+            if inline:
+                return jsonify(result), 202
             flash("Task accepted. Follow its progress below.", "info")
         except (ValueError, OSError) as exc:
+            if inline:
+                return jsonify(error=str(exc)), 409
             flash(str(exc), "error")
         return redirect(url_for("system_settings"))
 

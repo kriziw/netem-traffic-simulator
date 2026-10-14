@@ -179,3 +179,44 @@ test('target release feedback distinguishes up-to-date from failure with cached 
   ui.releaseCheckState({busy:false,job:{id:'failed',action:'target_check',state:'failed',message:'Cannot reach target'},target:{release:{tag:'v0.13.0',available:false}}});
   assert.match(element.className,/error/);assert.match(element.textContent,/Cannot reach target/);assert.doesNotMatch(element.textContent,/up to date/);
 });
+
+for(const scope of ['simulator','target'])for(const observeBusy of [false,true])test(scope+' check updates controls without refresh (busy poll: '+observeBusy+')',async()=>{
+  let submit,pollTick,posts=0;
+  const fields={};
+  for(const id of ['system-job','release-status','simulator-release-tag','check-update','install-update','target-status','target-release-status','target-job-status','target-release-tag','release-check-'+scope])
+    fields[id]={textContent:'',value:'',disabled:true,dataset:{},setAttribute(){}};
+  fields['system-job'].dataset={jobId:'old',busy:'false'};
+  fields['release-check-'+scope].dataset.releaseCheckIndicator=scope;
+  const targetButtons=['target_status','target_check','target_install'].map(action=>({dataset:{targetAction:action},disabled:true}));
+  let state={ready:true,busy:false,workload_active:false,release:{},job:{id:'old'},target:{connected:true,version:'1.0.0',release:{}}};
+  class Form{constructor(){this.method='post';this.dataset={releaseCheck:scope};}
+    getAttribute(){return '/settings/system/action';}querySelectorAll(){return [];}
+    setAttribute(){}removeAttribute(){}}
+  const ctx={window:{},document:{addEventListener:(_,fn)=>submit=fn,getElementById:id=>fields[id],querySelectorAll:()=>targetButtons},
+    HTMLFormElement:Form,FormData:class{},URL,location:{href:'https://simulator.example/settings/system',origin:'https://simulator.example'},
+    setInterval:fn=>{pollTick=fn;return 1},clearInterval(){},
+    fetch:async(url,options)=>{
+      if(options.method==='POST'){posts++;assert.equal(options.headers.Accept,'application/json');return {ok:true,headers:{get:()=> 'application/json'},json:async()=>({job_id:'new'})};}
+      assert.equal(url,'/settings/system/data');return {ok:true,json:async()=>state};
+    }};
+  // No DOMParser, workspace replacement, or reload is available: checks must not use them.
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('trafficgen/static/app.js','utf8'),ctx);
+  const ui=ctx.window.TrafficGen;ui.systemPage();await new Promise(setImmediate);
+  const install=scope==='simulator'?fields['install-update']:targetButtons[2];
+  assert.equal(install.disabled,true);
+  await submit({target:new Form(),defaultPrevented:false,preventDefault(){}});
+  assert.equal(posts,1);assert.equal(install.disabled,true);
+  const release={tag:'netem-traffic-simulator-v1.1.0',display_tag:'v1.1.0',available:true};
+  state={...state,job:{id:'unrelated',action:scope==='simulator'?'check_update':'target_check',state:'completed'}};
+  if(scope==='simulator')state.release=release;else state.target.release=release;
+  await pollTick();assert.equal(install.disabled,true,'an unrelated check cannot finish this request');
+  if(observeBusy){state.busy=true;state.job={...state.job,id:'new',state:'running'};await pollTick();assert.equal(install.disabled,true);}
+  state.busy=false;state.job={...state.job,id:'new',state:'completed'};await pollTick();
+  assert.equal(install.disabled,false);
+  assert.equal(fields[scope==='simulator'?'simulator-release-tag':'target-release-tag'].value,release.tag);
+  assert.match(fields[scope==='simulator'?'release-status':'target-release-status'].textContent,/v1.1.0 · update available/);
+  assert.match(fields['release-check-'+scope].textContent,/Update available/);
+  state.workload_active=true;await pollTick();assert.equal(install.disabled,true);
+  state.workload_active=false;release.available=false;await pollTick();assert.equal(install.disabled,true);
+  assert.match(fields[scope==='simulator'?'release-status':'target-release-status'].textContent,/up to date/);
+});
