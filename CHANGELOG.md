@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.1.0...v1.2.0) (2026-10-14)
+
+
+### Features
+
+* improve small-site evidence and measure target round-trip delay ([#75](https://github.com/kriziw/netem-traffic-simulator/issues/75)) ([cb0ee2a](https://github.com/kriziw/netem-traffic-simulator/commit/cb0ee2a6261702f0c782cf3a71b2c83d2a16d617))
+
 ## [1.1.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.0.0...v1.1.0) (2026-10-14)
 
 
