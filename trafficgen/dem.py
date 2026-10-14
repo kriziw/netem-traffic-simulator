@@ -10,8 +10,7 @@ from .profiles import APPLICATIONS
 from .experience_policy import default_policy, load_policy, criticality_weight, SCORE_MODEL
 
 
-# An application needs this many transactions in the window before its own score is shown: with fewer, one late lookup
-# or burst decides it. Its failures still count (see summarize_rows).
+# These are evidence gates for acceptance, not gates for displaying measured utility.
 MIN_APP_TRANSACTIONS = 5
 # The overall score needs this many transactions across the window to be complete; below it the result says so.
 MIN_SCORED_TRANSACTIONS = 20
@@ -63,6 +62,27 @@ def score_label(score):
     if score >= 35:
         return "Poor"
     return "Critical"
+
+
+def timing_measurements(rows):
+    """Existing traffic only: packet echo RTT is not HTTP completion or one-way delay."""
+    import json
+    from .packet_metrics import merge, percentile as packet_percentile
+    histograms = [json.loads(row['packet_rtt_histogram']) if isinstance(row.get('packet_rtt_histogram'), str)
+                  else row['packet_rtt_histogram'] for row in rows if row.get('packet_rtt_histogram')]
+    bins = merge(histograms)
+    http = [row for row in rows if row.get('request_type') != 'UDP' and row.get('success')]
+    return {'application_completion_p95_ms': percentile([row.get('response_time_ms') for row in http], .95),
+            'request_to_headers_p95_ms': percentile([row.get('wait_ms') for row in http], .95),
+            'response_body_p95_ms': percentile([row.get('transfer_ms') for row in http], .95),
+            'packet_rtd_p50_upper_ms': packet_percentile(bins, .5),
+            'packet_rtd_p95_upper_ms': packet_percentile(bins, .95),
+            'packet_rtd_samples': sum(bins.values()),
+            'packet_rtd_operations': len(histograms),
+            'rtd_basis': 'UDP echo packet round trip, including serialization, queueing and endpoint processing; histogram upper bounds',
+            'one_way_latency_ms': None,
+            'one_way_latency_status': 'not_measured: requires timestamp exchange and verified clock synchronization; RTD is not halved',
+            'http_basis': 'request start to complete response; headers include request upload and target processing; percentiles are not additive'}
 
 
 def quality_components(rows, targets, window_seconds=60):
@@ -182,6 +202,7 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
             "p95_ms": None,
             "average_ms": None,
             "experience_score": None,
+            "measurement_complete": False, "sample_confidence": "unobserved", "sample_count": 0,
             "experience": "No data",
             "bytes": 0,
             "scoring_complete": False,
@@ -262,6 +283,8 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
                  "alert_severity": severity, "compliance_method": "configured P95; one-sided Wilson 95%, minimum 3 misses; explicit hard deadlines zero tolerance",
                  "critical": targets["critical"], "score_components": components,
                  "quality": evidence, "experience_targets": targets, "missing_measurements": missing,
+                 "measurement_complete": not missing,
+                 "sample_confidence": "missing_measurements" if missing else "limited_sample" if total < minimum_transactions else "sample_count_supported",
                  "scoring_complete": not missing and len(rows) >= minimum_transactions, "limiting_application": application}
     else:
         groups = defaultdict(list)
@@ -275,8 +298,9 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         total_weight = sum(weights.values())
         weights = {key: value / total_weight for key, value in weights.items()} if total_weight else {}
         complete = bool(summaries) and all(item["scoring_complete"] for item in summaries.values())
-        scored = {key: item for key, item in summaries.items() if item["experience_score"] is not None and item["scoring_complete"]}
+        scored = {key: item for key, item in summaries.items() if item["experience_score"] is not None and item.get("measurement_complete")}
         coverage = sum(weights[key] for key in scored)
+        evidence_coverage = sum(weights[key] for key, item in summaries.items() if item["scoring_complete"])
         observed_points = sum(weights[key] * item["experience_score"] for key, item in scored.items())
         score = observed_points / coverage if coverage else None
         limiting = max(scored, key=lambda key: weights[key] * (100 - scored[key]["experience_score"])) if scored else None
@@ -293,7 +317,11 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
                                       "scoring_complete": item["scoring_complete"]} for key, item in summaries.items()
                                      if policy.get(key, {}).get("critical") and item.get("target_observations")],
                  "scoring_complete": complete, "coverage_pct": round(100 * coverage, 3),
+                 "evidence_coverage_pct": round(100 * evidence_coverage, 3),
+                 "measurement_complete": bool(summaries) and len(scored) == len(summaries),
+                 "sample_confidence": "sample_count_supported" if complete and total >= minimum_transactions else "limited_sample" if len(scored) == len(summaries) else "partial_coverage",
                  "score_range": {"minimum": round(observed_points, 2), "maximum": round(observed_points + 100 * (1 - coverage), 2)},
+                 "score_range_basis": "bounds for unobserved applications; not a statistical confidence interval",
                  "score_status": "complete" if complete and total >= minimum_transactions else "provisional",
                  "business_acceptance": ("fail" if any(policy.get(key, {}).get("critical") and item.get("target_violations") for key, item in summaries.items())
                                          else "unknown" if not complete or total < minimum_transactions or any(item.get("target_observations") for item in summaries.values()) else "pass"),
@@ -301,7 +329,7 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
                  "missing_measurements": {key: item.get("missing_measurements", []) or ["sample_count"]
                                           for key, item in summaries.items() if not item["scoring_complete"]}}
     insufficient = total < minimum_transactions
-    if application is not None and insufficient:
+    if application is not None and not extra.get("measurement_complete"):
         score = None
     extra["scoring_complete"] = extra["scoring_complete"] and not insufficient
     extra["insufficient_sample"] = insufficient
@@ -309,6 +337,10 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
     return {
         "score_model": SCORE_MODEL,
         "requests": total,
+        "sample_count": total,
+        "timing": timing_measurements(rows),
+        "first_observation_at": min((row.get("timestamp") for row in rows if row.get("timestamp") is not None), default=None),
+        "last_observation_at": max((row.get("timestamp") for row in rows if row.get("timestamp") is not None), default=None),
         "successes": len(successes),
         "failures": total - len(successes),
         "availability_pct": round(availability, 3),
@@ -382,6 +414,9 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         overall["score_status"] = "provisional"
         overall["business_acceptance"] = "unknown" if overall.get("business_acceptance") != "fail" else "fail"
         if mixed or any(reason in reasons for reason in ("clock_discontinuity", "row_limit", "dropped_transactions")):
+            overall['experience_score'] = None
+            overall['measurement_complete'] = False
+            overall['sample_confidence'] = 'invalid_evidence'
             overall["business_acceptance"] = "unknown"
             overall["critical_alerts"] = []
         overall["scoring_complete"] = False
@@ -430,10 +465,19 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
 
     if reasons:
         for group in (app_summary, persona_summary, endpoint_summary):
-            for item in group.values():
+            for key, item in group.items():
+                applicable = [reason for reason in reasons if reason != 'outstanding_overdue_operations'
+                              or group is not app_summary or key in lifecycle.get('overdue_by_application', {})
+                              or 'unknown' in lifecycle.get('overdue_by_application', {})]
+                if not applicable:
+                    continue
                 item["scoring_complete"] = False
-                item["evidence_issues"] = list(reasons)
+                item["evidence_issues"] = applicable
                 item["experience"] = "Incomplete evidence"
+                if any(reason != 'outstanding_overdue_operations' for reason in applicable):
+                    item['experience_score'] = None
+                    item['measurement_complete'] = False
+                    item['sample_confidence'] = 'invalid_evidence'
 
     if rows:
         duration = float(window_seconds)
@@ -458,6 +502,16 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         "applications": app_summary,
         "personas": persona_summary,
         "endpoints": endpoint_summary,
+    }
+    from .database import target_timing_rows
+    probes = target_timing_rows(database_path, run_id, start, end, intervals)
+    values = [item['rtd_ms'] for item in probes if item.get('success') and item.get('rtd_ms') is not None]
+    result.setdefault('timing', {})['target_rtd'] = {
+        'p50_ms': percentile(values, .5), 'p95_ms': percentile(values, .95),
+        'last_ms': values[-1] if values else None, 'samples': len(values), 'attempts': len(probes),
+        'no_reply': len(probes)-len(values), 'latest_at': probes[-1]['timestamp'] if probes else None,
+        'complete': len(probes) <= 100000,
+        'basis': 'independent UDP echo to controlled target agent, bound to workload source; at most one per second; no contribution to application scores',
     }
     import json
     transitions = []

@@ -1085,6 +1085,28 @@ def create_app():
                 summary["business_acceptance"] = "unknown"
         return summary
 
+    @app.get("/api/v1/runs/<run_id>/evidence")
+    @bearer_required
+    def api_run_evidence(run_id):
+        from .evidence_export import evidence_page
+        try:
+            # A FIFO barrier makes completed measurements visible before freezing
+            # each table's pagination ceiling. This does not wait for pending work.
+            import gevent
+            gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
+            result = offloaded(evidence_page, settings.database_path, run_id,
+                float(request.args["since"]), float(request.args["until"]),
+                request.args.get("kind", "transactions"), int(request.args.get("cursor", 0)),
+                int(request.args["ceiling"]) if "ceiling" in request.args else None,
+                int(request.args.get("limit", 1000)))
+            return jsonify(result)
+        except LookupError:
+            return {"error": "Run not found."}, 404
+        except (ValueError, KeyError, OverflowError):
+            return {"error": "Invalid evidence interval or cursor."}, 400
+        except gevent.Timeout:
+            return {"error": "Persistence has not caught up; retry export."}, 503
+
     @app.get("/api/v1/dem/summary")
     @bearer_required
     def api_dem_summary():

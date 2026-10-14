@@ -38,7 +38,7 @@ from . import live_window
 from .dem import dem_summary
 from .database import save_contract, record_data_loss
 from .experience_policy import load_policy, validate_policy, SCORE_MODEL
-from .workload import application_weights, compile_manifest
+from .workload import application_weights, balanced_application, compile_manifest
 from .rate import RateScheduler
 from .operation import Operation
 from .database import record_operation_events
@@ -304,7 +304,7 @@ class CorporateUser(HttpUser):
             self.persona = self._claim_persona(self.runtime_config)
             self.mix_revision = revision
         self.app_weights = combined_application_weights(self.persona, self.runtime_config["applications"])
-        app = getattr(self, 'rng', random).choices(list(self.app_weights), weights=list(self.app_weights.values()), k=1)[0]
+        app = balanced_application(self.runtime_config, self.persona, self.app_weights, getattr(self, 'rng', random))
         handler = getattr(self, f"_app_{app}", self._app_web_saas)
         handler()
 
@@ -633,6 +633,7 @@ class WorkloadController:
         self.run = None
         self.pattern_greenlet = None
         self.target_greenlet = None
+        self.timing_greenlet = None
         self.rate_scheduler = None
         self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
@@ -1109,7 +1110,24 @@ class WorkloadController:
                 }
 
             self.target_greenlet = gevent.spawn(self._monitor_target, run["run_id"], run["target"])
+            self.timing_greenlet = gevent.spawn(self._monitor_target_timing, run)
             return self.status()
+
+    def _monitor_target_timing(self, run):
+        from .target_timing import probe
+        while self.run is run and run.get('status') not in ('stopping', 'stopped'):
+            origin = time.monotonic()
+            context = dict(run.get('live_context') or {})
+            if context.get('until') is None:
+                try:
+                    result = probe(run)
+                except (OSError, ValueError) as exc:
+                    result = {'success': False, 'rtd_ms': None, 'error': type(exc).__name__, 'started_at': time.time()}
+                # A slow reply must not enter a subsequent phase/resumed segment.
+                if context.get('revision') == (run.get('live_context') or {}).get('revision'):
+                    self._operation_event(dict(result, kind='target_timing', run_id=run['run_id'],
+                        operation_id=uuid.uuid4().hex, phase_id=context.get('phase_id'), timestamp=time.time()))
+            gevent.sleep(max(.01, 1 - (time.monotonic() - origin)))
 
     def _reconcile_population(self, user_count=None, **_kwargs):
         if not self.runner or not self.run:
@@ -1300,6 +1318,9 @@ class WorkloadController:
         if self.target_greenlet is not None:
             self.target_greenlet.kill(block=False)
             self.target_greenlet = None
+        if self.timing_greenlet is not None:
+            self.timing_greenlet.kill(block=False)
+            self.timing_greenlet = None
         if self.pattern_greenlet is not None:
             try:
                 self.pattern_greenlet.kill(block=False)
@@ -1344,9 +1365,18 @@ class WorkloadController:
         dem["in_flight"] = {"requests": len(pending), "oldest_age_s": max((time.monotonic() - item.get("started_monotonic", time.monotonic()) for item in pending.values()), default=0)}
         overdue = [item for item in pending.values() if (time.monotonic() - item.get("started_monotonic", time.monotonic())) * 1000 > run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400)]
         if overdue:
+            counts = {}
+            for item in overdue:
+                app = item.get('application') or 'unknown'
+                counts[app] = counts.get(app, 0) + 1
             dem["at_risk"] = True
+            dem['overdue_by_application'] = counts
             dem["at_risk_reason"] = "Operations have exceeded their target and are still pending"
             dem["scoring_complete"] = False
+            for app, count in counts.items():
+                if app in dem.get('applications', {}):
+                    dem['applications'][app]['pending_overdue_operations'] = count
+                    dem['applications'][app]['scoring_complete'] = False
             dem.setdefault("evidence_issues", []).append("outstanding_overdue_operations")
         if run.get("media_missed_windows"):
             dem["scoring_complete"] = False
@@ -1372,6 +1402,7 @@ class WorkloadController:
             "status": run["status"],
             "run": run,
             "users": users,
+            "engine_telemetry": self.telemetry(),
             "dem": dem,
         }
 

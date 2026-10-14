@@ -162,7 +162,7 @@ window.TrafficGen = (() => {
       const top=item.top_cause?esc((labels||{})[item.top_cause]||words(item.top_cause))+" ×"+(item.causes||{})[item.top_cause]:"—";
       const quality=item.quality||{},components=Object.entries(item.score_components||{}).sort((a,b)=>a[1]-b[1]);
       const limiter=components.length?esc(words(components[0][0])):"—";
-      return "<tr><td>"+esc(words(key))+(item.critical?' · critical':'')+"</td><td>"+(item.experience_score??"—")+" · "+limiter+(item.scoring_complete===false?' · incomplete evidence':'')+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
+      return "<tr><td>"+esc(words(key))+(item.critical?' · critical':'')+"</td><td>"+(item.experience_score??"—")+" · "+limiter+(item.scoring_complete===false?(item.sample_confidence==='limited_sample'?' · limited sample':' · incomplete evidence'):'')+"</td><td>"+(item.availability_pct==null?"—":fmt(item.availability_pct,1)+"%")+
         "</td><td>"+(quality.on_time_pct==null?'—':fmt(quality.on_time_pct,1)+'%')+"</td><td>"+ms(quality.udp_rtt_variation_p95_ms)+
         "</td><td>"+ms(item.p95_ms)+"</td><td>"+ms(item.p95_wait_ms)+"</td><td>"+ms(item.p95_transfer_ms)+"</td><td>"+(rate?rate+" Mbit/s":"—")+
         "</td><td>"+media+"</td><td>"+top+"</td><td>"+item.requests+"</td></tr>";
@@ -242,6 +242,9 @@ window.TrafficGen = (() => {
           document.getElementById("dem-p95").textContent=s.interactive_p95_ms==null?"—":fmt(s.interactive_p95_ms,0)+" ms";
           document.getElementById("dem-p95-all").textContent="web, collaboration, DNS · all apps "+(s.p95_ms==null?"—":fmt(s.p95_ms,0)+" ms");
           document.getElementById("dem-users").textContent=payload.users??0;
+          const timing=(s.timing||{}).target_rtd||{};
+          const timingNode=document.getElementById("dem-network-timing");
+          if(timingNode)timingNode.textContent="Target agent round-trip delay (RTD/RTT), P95: "+(timing.p95_ms==null?"not measured in this window":fmt(timing.p95_ms,1)+" ms · "+timing.samples+" replies")+". UDP echo over the workload path, including endpoint processing. One-way network latency is not measured.";
           const diagnosis=s.diagnosis||{};
           document.getElementById("dem-findings").innerHTML=findingsHtml(diagnosis);
           document.getElementById("dem-egress").innerHTML=egressRowsHtml(diagnosis);
