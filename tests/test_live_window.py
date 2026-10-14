@@ -103,3 +103,14 @@ def test_start_validation_and_http_context_preserve_report_queries(simulator):
     assert controller.run['live_context']['phase_id'] == 'test-1:1'
     controller.runner = None
     run['status'] = 'stopped'
+
+
+def test_same_tick_or_clock_reversal_never_reuses_previous_phase(tmp_path):
+    path, run, context, now = make_run(tmp_path)
+    for instant in (now, now-1):
+        boundary = dict(context, since=now)
+        with patch('trafficgen.live_window.time.time', return_value=instant):
+            summary = live_window.measure(path, run['run_id'], boundary)
+        assert summary['requests'] == 0 and summary['scoring_complete'] is False
+        assert summary['collecting_evidence'] is True
+        assert 'live_interval_unavailable' in summary['evidence_issues']

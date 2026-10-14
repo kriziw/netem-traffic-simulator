@@ -756,8 +756,8 @@ class WorkloadController:
                 snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"), live_revision=(run.get("live_context") or {}).get("revision"))
                 if snapshot is None:
                     # The worker has not published this run recently: sample a DEM computed here, off the event loop.
-                    summary = self.query_dem(run_id=run["run_id"],
-                                        **live_window.query_arguments(run["live_context"]), diagnosis=False)
+                    summary = live_window.measure(self.settings.database_path, run["run_id"], run["live_context"],
+                                                  media_mode=run.get("media_mode", "strict"), query=self.query_dem, diagnosis=False)
                 elif snapshot["created"] == self.last_sampled:
                     continue
                 else:
@@ -929,10 +929,9 @@ class WorkloadController:
             if cached and cached[0] == (run["run_id"], (run.get("live_context") or {}).get("revision")) and 0 <= time.monotonic() - cached[1] < 1:
                 return copy.deepcopy(cached[2])
             context = run.get("live_context") or live_window.read_context(self.settings.database_path, run['run_id'])
-            arguments = live_window.query_arguments(context) if context else {'window_seconds': 15}
-            result = self.query_dem(run_id=run["run_id"], media_mode=run.get("media_mode", "strict"), **arguments)
-            if context:
-                live_window.annotate(result, context)
+            result = (live_window.measure(self.settings.database_path, run['run_id'], context,
+                      media_mode=run.get('media_mode', 'strict'), query=self.query_dem) if context else
+                      self.query_dem(run_id=run['run_id'], window_seconds=15, media_mode=run.get('media_mode', 'strict')))
             self.last_live_dem = ((run["run_id"], (context or {}).get('revision')), time.monotonic(), copy.deepcopy(result))
             return result
 

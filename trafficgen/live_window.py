@@ -68,7 +68,7 @@ def query_arguments(context, now=None):
     now = time.time() if now is None else now
     end = context.get('until') if context.get('until') is not None else now
     start = max(context['since'], end - context['window_seconds'])
-    if start >= end:
+    if start >= end or end > now + .1:
         raise ValueError('No current-phase observation interval yet.')
     return dict(window_seconds=context['window_seconds'], since=start, until=end)
 
@@ -79,3 +79,21 @@ def annotate(summary, context):
                    collecting_evidence=summary.get('scoring_complete') is not True,
                    live_paused=context['until'] is not None)
     return summary
+
+
+def measure(path, run_id, context, media_mode='strict', query=None, diagnosis=True):
+    from .dem import dem_summary, summarize_rows
+    query = query or (lambda **arguments: dem_summary(path, **arguments))
+    try:
+        arguments = query_arguments(context)
+    except ValueError:
+        # A boundary can be acknowledged in the same clock tick, or the clock
+        # can move backwards. Neither condition authorizes using previous data.
+        summary = dict(summarize_rows([]), run_id=run_id, applications={}, personas={}, endpoints={},
+            diagnosis={'findings': [], 'egress': {}}, timestamp=time.time(), since=context['since'],
+            until=context.get('until') or time.time(), window_seconds=0, truncated=False,
+            evidence_issues=['live_interval_unavailable'], interactive_p95_ms=None,
+            requests_per_second=0, failures_per_second=0, at_risk=False)
+    else:
+        summary = query(run_id=run_id, media_mode=media_mode, diagnosis=diagnosis, **arguments)
+    return annotate(summary, context)

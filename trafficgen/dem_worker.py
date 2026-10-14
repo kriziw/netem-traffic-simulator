@@ -39,10 +39,8 @@ def publish_once(database_path, now=None):
     dem = None
     if run_id is not None:
         context = live_window.read_context(database_path, run_id)
-        arguments = live_window.query_arguments(context) if context else {'window_seconds': 15}
-        dem = dem_summary(Path(database_path), run_id=run_id, media_mode=media_mode or "strict", **arguments)
-        if context:
-            live_window.annotate(dem, context)
+        dem = (live_window.measure(database_path, run_id, context, media_mode or 'strict') if context else
+               dem_summary(Path(database_path), run_id=run_id, media_mode=media_mode or 'strict', window_seconds=15))
     snapshot = {"created": time.time() if now is None else now, "run_id": run_id, "dem": dem,
                 "created_monotonic": time.monotonic(),
                 "compute_ms": round((time.perf_counter() - started) * 1000.0, 1)}
