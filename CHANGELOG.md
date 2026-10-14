@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.0.0...v1.1.0) (2026-10-14)
+
+
+### Features
+
+* publish configurable phase-scoped live experience windows ([#74](https://github.com/kriziw/netem-traffic-simulator/issues/74)) ([ddb544c](https://github.com/kriziw/netem-traffic-simulator/commit/ddb544c11b9406a42902e3ff4b8c3b0df4dee262))
+
+
+### Bug Fixes
+
+* refresh simulator and target update controls in place ([#72](https://github.com/kriziw/netem-traffic-simulator/issues/72)) ([ea0899b](https://github.com/kriziw/netem-traffic-simulator/commit/ea0899b846c7eb6f16819774eb13daa61a24b5d9))
+
 ## [1.0.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.4...v1.0.0) (2026-10-14)
 
 
