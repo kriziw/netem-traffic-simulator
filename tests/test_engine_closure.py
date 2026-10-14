@@ -154,3 +154,27 @@ def test_full_media_echo_has_matching_payload_and_packet_histogram():
         stop.set()
         worker.kill()
         sock.close()
+
+
+def test_repeated_shutdown_does_not_query_an_already_stopped_worker(simulator):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    controller.shutdown()
+    with patch.object(controller, "stop") as stop:
+        controller.shutdown()
+    stop.assert_not_called()
+
+
+def test_worker_timeout_keeps_public_experience_envelope_renderable(simulator, monkeypatch):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    monkeypatch.delenv("TRAFFICGEN_DEM_WORKER", raising=False)
+    with patch("trafficgen.engine.offloaded", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)), patch("trafficgen.aggregation.enqueue", return_value="missing"), patch("trafficgen.engine.time.monotonic", side_effect=[0, 6]):
+        fallback = controller.query_dem(run_id="missing", window_seconds=60)
+    monkeypatch.setenv("TRAFFICGEN_DEM_WORKER", "0")
+    assert fallback["window_seconds"] == 60
+    assert fallback["business_acceptance"] == "unknown"
+    assert fallback["coverage_pct"] == 0
+    key = simulator.config["TRAFFICGEN_SETTINGS"].api_key_path.read_text().strip()
+    with patch.object(controller, "query_dem", return_value=fallback):
+        response = simulator.test_client().get("/api/v1/dem/experience", headers={"Authorization": "Bearer " + key})
+    assert response.status_code == 200
+    assert response.json["business_acceptance"] == "unknown"

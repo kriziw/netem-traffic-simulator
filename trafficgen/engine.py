@@ -714,7 +714,13 @@ class WorkloadController:
                 return result["dem"]
             gevent.sleep(.05)
         from .dem import summarize_rows
+        end = arguments.get("until") or time.time()
+        window = arguments.get("window_seconds", 60)
+        start = arguments.get("since") or end - window
         return dict(summarize_rows([]), applications={}, personas={}, endpoints={},
+                    window_seconds=end - start, since=start, until=end,
+                    score_model=SCORE_MODEL, score_status="unavailable", business_acceptance="unknown",
+                    coverage_pct=0, score_range={"minimum": 0, "maximum": 100},
                     diagnosis={"findings": [], "egress": {}}, run_id=arguments.get("run_id"),
                     interactive_p95_ms=None, requests_per_second=0, failures_per_second=0,
                     timestamp=time.time(), evidence_issues=["aggregation_unavailable"], truncated=False)
@@ -1366,6 +1372,10 @@ class WorkloadController:
         }
 
     def shutdown(self):
+        # Flask registers this with atexit as well as explicit controller cleanup.
+        # Re-entering stop after the worker is gone queues an unanswered DEM query.
+        if self.stop_event.is_set():
+            return
         try:
             self.stop()
         except Exception:
@@ -1373,7 +1383,15 @@ class WorkloadController:
         self.stop_event.set()
         for greenlet in self.monitor_greenlets:
             greenlet.kill()
-        if self.dem_worker is not None and self.dem_worker.poll() is None:
-            self.dem_worker.terminate()
+        if self.dem_worker is not None:
+            if self.dem_worker.poll() is None:
+                self.dem_worker.terminate()
+            if self.dem_worker.stdin:
+                self.dem_worker.stdin.close()
+            try:
+                self.dem_worker.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.dem_worker.kill()
+                self.dem_worker.wait(timeout=3)
         self.writer_thread.join(timeout=5)
         self.dem_thread.join(timeout=5)
