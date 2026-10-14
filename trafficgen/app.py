@@ -43,7 +43,7 @@ from .diagnosis import target_finding
 from .engine import WorkloadController
 from .offload import offloaded
 from .profiles import profile_payload
-from . import maintenance
+from . import maintenance, live_window
 from . import remote_target
 from . import traffic_paths
 from . import network_setup
@@ -1053,11 +1053,19 @@ def create_app():
                 gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
             except gevent.Timeout:
                 raise ValueError("Persistence has not caught up to the requested interval.") from None
-        summary = app.config["TRAFFICGEN_CONTROLLER"].query_dem(run_id=run_id,
-                            window_seconds=window, media_mode=run.get("media_mode", "strict"),
-                            since=float(since) if since is not None else None,
-                            until=float(until) if until is not None else None,
-                            intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
+        controller = app.config["TRAFFICGEN_CONTROLLER"]
+        context = run.get('live_context') or {}
+        if since is None and run_id == run.get('run_id') and context.get('phase_id'):
+            # Explicit rolling windows used by assertions still belong to this
+            # phase. Only an explicit historical interval may cross its boundary.
+            summary = live_window.measure(settings.database_path, run_id, dict(context, window_seconds=window),
+                media_mode=run.get('media_mode', 'strict'), query=controller.query_dem)
+        else:
+            summary = controller.query_dem(run_id=run_id,
+                                window_seconds=window, media_mode=run.get("media_mode", "strict"),
+                                since=float(since) if since is not None else None,
+                                until=float(until) if until is not None else None,
+                                intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
         if since is None and run_id == run.get("run_id"):
             live = status.get("dem") or {}
             summary["in_flight"] = live.get("in_flight")

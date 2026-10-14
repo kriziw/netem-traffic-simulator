@@ -97,6 +97,9 @@ def test_start_validation_and_http_context_preserve_report_queries(simulator):
     assert dem['collecting_evidence'] is True
     summary = client.get('/api/v1/dem/summary', headers=headers).json
     assert summary['live_phase_id'] == 'test-1:1'  # Default API uses the selected live scope.
+    longer = client.get('/api/v1/dem/summary?window=60', headers=headers).json
+    assert longer['live_phase_id'] == 'test-1:1'
+    assert longer['since'] == dem['since']
     bad = client.post('/api/v1/controller/heartbeat', headers=headers, json={
         'run_id': run['run_id'], 'live_context': {'phase_id': 'bad', 'window_seconds': 121}})
     assert bad.status_code == 400
