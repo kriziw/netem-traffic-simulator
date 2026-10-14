@@ -105,8 +105,26 @@ def test_aggregation_queue_is_bounded_and_deduplicates(tmp_path):
         enqueue(db, {"run_id": str(index)})
     with pytest.raises(ValueError, match="queue is full"):
         enqueue(db, {"run_id": "ninth"})
-    assert process_one(db)
+    assert process_one(str(db))  # The worker CLI supplies a string, unlike unit fixtures.
     assert read_result(db, key)["dem"]["requests"] == 0
+
+
+def test_supervised_process_serves_queries(simulator, monkeypatch):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    monkeypatch.delenv("TRAFFICGEN_DEM_WORKER", raising=False)
+    controller.dem_worker = controller._start_dem_worker()
+    result = controller.query_dem(run_id="worker-enabled-regression", window_seconds=60)
+    assert result["requests"] == 0
+    assert "aggregation_unavailable" not in result["evidence_issues"]
+    assert result["interactive_p95_ms"] is None
+
+
+def test_sustained_media_is_rejected_before_run_creation_on_old_target(simulator):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    with patch.object(controller, "_probe_target", return_value={"capabilities": ["media-echo", "observed-source"]}):
+        with pytest.raises(ValueError, match="update the target first"):
+            controller.start({"media_pattern": "sustained"})
+    assert controller.run is None
 
 
 def test_full_media_echo_has_matching_payload_and_packet_histogram():

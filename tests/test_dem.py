@@ -69,7 +69,9 @@ def test_business_application_cannot_be_hidden_by_healthy_bulk_traffic():
 
 def test_insufficient_failed_only_application_does_not_claim_a_site_outage():
     rows = [transaction("web_saas")] * 1000 + [transaction("erp", success=False)]
-    assert summarize_rows(rows)["experience_score"] is None
+    assert summarize_rows(rows)["experience_score"] == 100
+    assert summarize_rows(rows)["score_status"] == "provisional"
+    assert summarize_rows(rows)["coverage_pct"] == 50
     assert summarize_rows(rows)["scoring_complete"] is False
 
 

@@ -41,7 +41,10 @@ def test_configured_target_is_authoritative_and_elastic():
 def test_missing_expected_application_is_unknown_not_renormalized():
     result = summarize_rows([row()] * 100, application_shares={"web_saas": .5, "erp": .5})
     assert not result["scoring_complete"]
-    assert result["experience_score"] is None
+    assert result["experience_score"] == 100
+    assert result["score_status"] == "provisional"
+    assert result["score_range"] == {"minimum": 50, "maximum": 100}
+    assert result["business_acceptance"] == "unknown"
     assert result["coverage_pct"] == 50
     assert "erp" in result["missing_measurements"]
 
@@ -160,3 +163,35 @@ def test_phase_persistence_barrier_finishes_while_new_traffic_continues(simulato
     finally:
         stop.set()
         producer.join()
+
+
+def test_statistical_compliance_distinguishes_observations_and_confirmed_failures():
+    policy = validate_policy({"erp": {"deadline_ms": 400, "success_min_pct": 99}})
+    isolated = summarize_rows([row("erp", ms=100)] * 49 + [row("erp", ms=500)], "erp", policy)
+    assert isolated["compliance"]["deadline"] is True  # Configured P95, not maximum.
+    failure = summarize_rows([row("erp", ms=100)] * 49 + [row("erp", ok=False)], "erp", policy)
+    assert failure["target_observations"] == ["success"]
+    assert failure["target_violations"] == []
+    assert failure["alert_severity"] == "observation"
+    sustained = summarize_rows([row("erp", ms=100)] * 40 + [row("erp", ms=500)] * 10, "erp", policy)
+    assert sustained["target_violations"] == ["deadline"]
+    assert sustained["alert_severity"] == "violation"
+    hard = validate_policy({"erp": {"deadline_ms": 400, "hard_deadline": True}})
+    assert summarize_rows([row("erp", ms=100)] * 49 + [row("erp", ms=500)], "erp", hard)["target_violations"] == ["deadline"]
+
+
+def test_confirmed_critical_outage_survives_missing_other_application():
+    result = summarize_rows([row("erp", ok=False)] * 5, application_shares={"erp": .1, "web_saas": .9})
+    assert result["experience_score"] == 0  # Only the observed application is down.
+    assert result["score_range"] == {"minimum": 0, "maximum": 90}
+    assert result["coverage_pct"] == 10
+    assert not result["scoring_complete"]
+    assert result["business_acceptance"] == "fail"
+    assert result["critical_alerts"][0]["severity"] == "outage"
+
+
+def test_legacy_shadow_does_not_control_primary_score():
+    from trafficgen.legacy_score import legacy_summary
+    rows = [row()] * 108 + [row("voice", 100)] * 4 + [row("voice", 0, False)]
+    assert legacy_summary(rows)["experience_score"] == 0
+    assert summarize_rows(rows, application_shares={"web_saas": .95, "voice": .05})["experience_score"] > 90

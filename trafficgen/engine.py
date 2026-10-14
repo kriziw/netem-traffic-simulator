@@ -716,6 +716,7 @@ class WorkloadController:
         from .dem import summarize_rows
         return dict(summarize_rows([]), applications={}, personas={}, endpoints={},
                     diagnosis={"findings": [], "egress": {}}, run_id=arguments.get("run_id"),
+                    interactive_p95_ms=None, requests_per_second=0, failures_per_second=0,
                     timestamp=time.time(), evidence_issues=["aggregation_unavailable"], truncated=False)
 
     def _operation_event(self, event):
@@ -1038,6 +1039,11 @@ class WorkloadController:
             run = self._validate_start(raw)
             if traffic_path:
                 run["traffic_path"] = copy.deepcopy(traffic_path)
+            if run.get("media_pattern") == "sustained":
+                info = self._probe_target(run["run_id"], run["target"], candidate=run)
+                if info.get("error") or "media-full-echo-v1" not in info.get("capabilities", []):
+                    raise ValueError("Sustained media requires a reachable controlled target advertising media-full-echo-v1; update the target first.")
+                run["target_info"] = info
             run["configured_policy"] = copy.deepcopy(run["policy"])
             run["manifest"] = compile_manifest(run)
             if run["media_mode"] == "strict":
@@ -1130,11 +1136,11 @@ class WorkloadController:
             self._probe_target(run_id, target)
             gevent.sleep(30)
 
-    def _probe_target(self, run_id: str, target: str):
+    def _probe_target(self, run_id: str, target: str, candidate=None):
         # An outdated target cannot report the WAN and may not echo media at all.
         info = {"checked_at": time.time(), "version": None, "capabilities": [], "error": None}
         try:
-            source = ((self.run or {}).get("traffic_path") or {}).get("source")
+            source = (((candidate if candidate is not None else self.run) or {}).get("traffic_path") or {}).get("source")
             if source:
                 from .traffic_paths import bind_http
                 with bind_http(requests.Session(), source) as bound:
@@ -1156,6 +1162,7 @@ class WorkloadController:
         with self.lock:
             if self.run and self.run["run_id"] == run_id:
                 self.run["target_info"] = info
+        return info
 
     def _run_pattern(self, run_id: str, stages: list):
         for index, stage in enumerate(stages, start=1):
@@ -1329,6 +1336,8 @@ class WorkloadController:
         dem["in_flight"] = {"requests": len(pending), "oldest_age_s": max((time.monotonic() - item.get("started_monotonic", time.monotonic()) for item in pending.values()), default=0)}
         overdue = [item for item in pending.values() if (time.monotonic() - item.get("started_monotonic", time.monotonic())) * 1000 > run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400)]
         if overdue:
+            dem["at_risk"] = True
+            dem["at_risk_reason"] = "Operations have exceeded their target and are still pending"
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("outstanding_overdue_operations")
         if run.get("media_missed_windows"):
@@ -1337,6 +1346,10 @@ class WorkloadController:
         if self.dropped_transactions or self.persistence_error:
             dem["scoring_complete"] = False
             dem.setdefault("evidence_issues", []).append("persistence_unhealthy")
+        if dem.get("scoring_complete") is not True:
+            dem["score_status"] = "provisional"
+            if dem.get("business_acceptance") != "fail":
+                dem["business_acceptance"] = "unknown"
         self._note_timing("status_ms", (time.perf_counter() - started) * 1000.0)
         outdated = target_finding(run.get("target_info"), __version__)
         if outdated:

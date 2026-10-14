@@ -152,6 +152,20 @@ def quality_components(rows, targets, window_seconds=60):
     return components, evidence, missing
 
 
+def confirmed_miss_rate(misses, trials, allowed):
+    """One-sided 95% Wilson lower bound, with at least three independent operations.
+
+    This is evidence of a target violation, not proof of a cause. Packet samples
+    within a burst are correlated; ordinary latency inference uses operations.
+    """
+    if misses < 3 or not trials:
+        return False
+    z = 1.6448536269514722
+    rate = misses / trials
+    lower = (rate + z*z/(2*trials) - z*math.sqrt(rate*(1-rate)/trials + z*z/(4*trials*trials))) / (1 + z*z/trials)
+    return lower > allowed + 1e-12
+
+
 def summarize_rows(rows, application=None, policy=None, window_seconds=60, minimum_transactions=None, application_shares=None, scope="application"):
     policy = policy if policy is not None else default_policy()
     total = len(rows)
@@ -215,8 +229,10 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         transport_pct = (len(successes) + loss_accounted) * 100 / total
         components["reliability"] = reliability_score(transport_pct, targets.get("success_min_pct", 100))
         score = quality_score * components["reliability"] / 100
+        latency_p95 = evidence.get("packet_rtt_p95_upper_ms", p95)
         compliance = {"success": availability >= targets.get("success_min_pct", 100),
-                      "deadline": evidence.get("deadline_misses", 0) == 0}
+                      "deadline": (evidence.get("deadline_misses", 0) == 0 if targets.get("hard_deadline")
+                                   else latency_p95 <= targets["deadline_ms"] if latency_p95 is not None else None)}
         if "udp_loss_pct" in evidence:
             compliance["loss"] = evidence["udp_loss_pct"] <= targets["loss_max_pct"]
         if "udp_rtt_variation_p95_ms" in evidence:
@@ -226,9 +242,24 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
                                          ("sustained", "sustained_" + direction + "_mbps", "min_sustained_" + direction + "_mbps")):
                 if targets.get(target, 0):
                     compliance[kind + "_" + direction] = evidence.get(metric) is not None and evidence[metric] >= targets[target]
+        observed = [key for key, met in compliance.items() if met is False]
+        confirmed = []
+        for key in observed:
+            if key == "success":
+                supported = confirmed_miss_rate(total - len(successes), total, 1 - targets.get("success_min_pct", 100) / 100)
+            elif key == "deadline" and not targets.get("hard_deadline"):
+                # A burst is one observation; its packets are not independent trials.
+                misses = sum(row["response_time_ms"] > targets["deadline_ms"] for row in successes if row.get("response_time_ms") is not None)
+                supported = confirmed_miss_rate(misses, len(latencies), .05)
+            else:
+                supported = bool(targets.get("hard_deadline") and key == "deadline") or (total >= minimum_transactions and not missing)
+            if supported:
+                confirmed.append(key)
+        severity = "outage" if confirmed and not successes and total >= 3 else "violation" if confirmed else "observation" if observed else "none"
         extra = {"criticality": targets.get("criticality", "critical" if targets["critical"] else "standard"),
                  "criticality_weight": criticality_weight(targets), "compliance": compliance,
-                 "target_violations": [key for key, met in compliance.items() if not met],
+                 "target_violations": confirmed, "target_observations": observed,
+                 "alert_severity": severity, "compliance_method": "configured P95; one-sided Wilson 95%, minimum 3 misses; explicit hard deadlines zero tolerance",
                  "critical": targets["critical"], "score_components": components,
                  "quality": evidence, "experience_targets": targets, "missing_measurements": missing,
                  "scoring_complete": not missing and len(rows) >= minimum_transactions, "limiting_application": application}
@@ -244,20 +275,28 @@ def summarize_rows(rows, application=None, policy=None, window_seconds=60, minim
         total_weight = sum(weights.values())
         weights = {key: value / total_weight for key, value in weights.items()} if total_weight else {}
         complete = bool(summaries) and all(item["scoring_complete"] for item in summaries.values())
-        scored = {key: item for key, item in summaries.items() if item["experience_score"] is not None}
-        score = sum(weights[key] * item["experience_score"] for key, item in scored.items()) if len(scored) == len(summaries) and summaries else None
+        scored = {key: item for key, item in summaries.items() if item["experience_score"] is not None and item["scoring_complete"]}
+        coverage = sum(weights[key] for key in scored)
+        observed_points = sum(weights[key] * item["experience_score"] for key, item in scored.items())
+        score = observed_points / coverage if coverage else None
         limiting = max(scored, key=lambda key: weights[key] * (100 - scored[key]["experience_score"])) if scored else None
         contributions = {key: {"configured_share": shares[key], "weight": weights[key],
                          "score": item["experience_score"], "criticality_weight": criticality_weight(policy.get(key, {})),
                          "lost_points": weights[key] * (100 - item["experience_score"]) if item["experience_score"] is not None else None,
-                         "target_violations": item.get("target_violations", []), "requests": item["requests"],
+                         "target_violations": item.get("target_violations", []), "target_observations": item.get("target_observations", []),
+                         "alert_severity": item.get("alert_severity", "none"), "requests": item["requests"],
                          "scoring_complete": item["scoring_complete"]} for key, item in summaries.items()}
         extra = {"limiting_application": limiting, "application_contributions": contributions,
                  "critical_applications": sorted(key for key in summaries if policy.get(key, {}).get("critical")),
                  "critical_alerts": [{"application": key, "violations": item.get("target_violations", []),
+                                      "severity": item.get("alert_severity"), "observations": item.get("target_observations", []),
                                       "scoring_complete": item["scoring_complete"]} for key, item in summaries.items()
-                                     if policy.get(key, {}).get("critical") and item.get("target_violations")],
-                 "scoring_complete": complete, "coverage_pct": 100 * sum(weights[key] for key in scored),
+                                     if policy.get(key, {}).get("critical") and item.get("target_observations")],
+                 "scoring_complete": complete, "coverage_pct": round(100 * coverage, 3),
+                 "score_range": {"minimum": round(observed_points, 2), "maximum": round(observed_points + 100 * (1 - coverage), 2)},
+                 "score_status": "complete" if complete and total >= minimum_transactions else "provisional",
+                 "business_acceptance": ("fail" if any(policy.get(key, {}).get("critical") and item.get("target_violations") for key, item in summaries.items())
+                                         else "unknown" if not complete or total < minimum_transactions or any(item.get("target_observations") for item in summaries.values()) else "pass"),
                  "weight_source": "configured_workload" if application_shares is not None else "equal_application",
                  "missing_measurements": {key: item.get("missing_measurements", []) or ["sample_count"]
                                           for key, item in summaries.items() if not item["scoring_complete"]}}
@@ -316,6 +355,9 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     media_mode = (contract or {}).get("media_mode") or media_mode
     shares = contract["manifest"]["application_shares"] if contract else None
     overall = summarize_rows(rows, policy=policy, window_seconds=window_seconds, application_shares=shares)
+    from .legacy_score import legacy_summary
+    overall["legacy_score"] = legacy_summary(rows, policy=policy, window_seconds=window_seconds)["experience_score"]
+    overall["legacy_model"] = "legacy-v1-f0aea4c-shadow"
     from .database import operation_evidence
     lifecycle = operation_evidence(database_path, run_id, start, end)
     if intervals:
@@ -337,6 +379,11 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     if contract and contract.get("dropped_transactions", 0):
         reasons.append("dropped_transactions")
     if reasons:
+        overall["score_status"] = "provisional"
+        overall["business_acceptance"] = "unknown" if overall.get("business_acceptance") != "fail" else "fail"
+        if mixed or "clock_discontinuity" in reasons or "row_limit" in reasons:
+            overall["business_acceptance"] = "unknown"
+            overall["critical_alerts"] = []
         overall["scoring_complete"] = False
         overall["experience"] = "Incomplete evidence"
 
@@ -397,6 +444,8 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
 
     result = {
         "operation_lifecycle": lifecycle,
+        "at_risk": bool(lifecycle["overdue_at_end"]),
+        "at_risk_reason": "Operations have exceeded their target and are still pending" if lifecycle["overdue_at_end"] else None,
         "truncated": len(rows) >= 50000,
         "timestamp": now, "run_id": run_id, "since": start, "until": end,
         "evidence_issues": reasons, "policy_source": "run_snapshot" if contract else "current_policy_regrade",
