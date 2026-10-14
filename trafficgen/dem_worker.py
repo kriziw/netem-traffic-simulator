@@ -39,29 +39,40 @@ def publish_once(database_path, now=None):
     if run_id is not None:
         dem = dem_summary(Path(database_path), run_id=run_id, window_seconds=60, media_mode=media_mode or "strict")
     snapshot = {"created": time.time() if now is None else now, "run_id": run_id, "dem": dem,
+                "created_monotonic": time.monotonic(),
                 "compute_ms": round((time.perf_counter() - started) * 1000.0, 1)}
     write_dem_snapshot(Path(database_path), snapshot)
     return snapshot
 
 
-def fresh_snapshot(snapshot, run_id, now=None):
+def fresh_snapshot(snapshot, run_id, now=None, contract_epoch=None):
     """The published snapshot when it is for this run and recent enough to show; otherwise None."""
     if not snapshot or snapshot.get("run_id") != run_id or not snapshot.get("dem"):
         return None
-    if (time.time() if now is None else now) - snapshot["created"] > SNAPSHOT_MAX_AGE_S:
+    if contract_epoch is not None and snapshot["dem"].get("contract_epoch") != contract_epoch:
         return None
+    if not 0 <= (time.time() if now is None else now) - snapshot["created"] <= SNAPSHOT_MAX_AGE_S:
+        return None
+    if now is None and snapshot.get("created_monotonic") is not None:
+        age = time.monotonic() - snapshot["created_monotonic"]
+        if not 0 <= age <= SNAPSHOT_MAX_AGE_S or abs((time.time() - snapshot["created"]) - age) > 1:
+            return None
     return snapshot
 
 
 def serve(database_path, stop, interval_s=SNAPSHOT_INTERVAL_S):
     """Publishes a snapshot every interval until stop is set. A failed pass is logged and the next one still runs."""
+    from .aggregation import process_one
+    next_snapshot = 0
     while not stop.is_set():
-        started = time.monotonic()
         try:
-            publish_once(database_path)
+            if time.monotonic() >= next_snapshot:
+                publish_once(database_path)
+                next_snapshot = time.monotonic() + interval_s
+            process_one(database_path)
         except Exception:
             logging.exception("Cannot publish the DEM snapshot")
-        stop.wait(max(0.0, interval_s - (time.monotonic() - started)))
+        stop.wait(min(.05, interval_s))
 
 
 def _stop_when_stdin_closes(stop):

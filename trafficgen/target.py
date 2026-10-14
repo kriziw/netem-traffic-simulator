@@ -17,7 +17,7 @@ import time
 from flask import Flask, Response, jsonify, request
 
 from . import __version__
-from .wire import ADDRESS_REQUEST, ECHO_HEADER_BYTES, OBSERVED_SOURCE_HEADER, normalize_address, pack_address
+from .wire import FULL_ECHO_REQUEST, ADDRESS_REQUEST, ECHO_HEADER_BYTES, OBSERVED_SOURCE_HEADER, normalize_address, pack_address
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
@@ -48,10 +48,14 @@ def byte_stream(size_bytes, chunk=65536):
         remaining -= len(part)
 
 
+UDP_HEALTH = {"running": False, "errors": 0, "last_error": None}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "netem-traffic-target", "version": __version__,
-            "capabilities": ["media-echo", "observed-source"], "time": time.time()}
+            "capabilities": (["media-echo", "media-full-echo-v1", "observed-source"] if UDP_HEALTH["running"] else ["observed-source"]),
+            "media_echo": dict(UDP_HEALTH), "time": time.time()}
 
 
 @app.get("/web/page")
@@ -168,34 +172,46 @@ def udp_socket(host: str, port: int):
 def udp_sink(host: str, port: int, stop_event: threading.Event, sock=None):
     sock = sock if sock is not None else udp_socket(host, port)
     packet_info = udp_packet_info(sock)
-    while not stop_event.is_set():
-        try:
-            ancillary = []
-            if packet_info:
-                data, received_info, flags, peer = sock.recvmsg(65535, socket.CMSG_SPACE(packet_info[2]))
-                if flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC):
-                    continue
-                ancillary = reply_packet_info(received_info, packet_info)
-                if not ancillary:
-                    continue
-            else:
-                data, peer = sock.recvfrom(65535)
-            if len(data) >= ECHO_HEADER_BYTES:
-                reply = data[:ECHO_HEADER_BYTES]
-                if data[ECHO_HEADER_BYTES:ECHO_HEADER_BYTES + len(ADDRESS_REQUEST)] == ADDRESS_REQUEST:
-                    try:
-                        reply += pack_address(peer[0])
-                    except ValueError:
-                        pass
+    UDP_HEALTH["running"] = True
+    try:
+        while not stop_event.is_set():
+            try:
+                ancillary = []
                 if packet_info:
-                    sock.sendmsg([reply], ancillary, 0, peer)
+                    data, received_info, flags, peer = sock.recvmsg(65535, socket.CMSG_SPACE(packet_info[2]))
+                    if flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC):
+                        continue
+                    ancillary = reply_packet_info(received_info, packet_info)
+                    if not ancillary:
+                        continue
                 else:
-                    sock.sendto(reply, peer)
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-    sock.close()
+                    data, peer = sock.recvfrom(65535)
+                if len(data) >= ECHO_HEADER_BYTES:
+                    reply = data[:ECHO_HEADER_BYTES]
+                    if data[ECHO_HEADER_BYTES:ECHO_HEADER_BYTES + len(ADDRESS_REQUEST)] == ADDRESS_REQUEST:
+                        try:
+                            reply += pack_address(peer[0])
+                        except ValueError:
+                            pass
+                    if data[ECHO_HEADER_BYTES:ECHO_HEADER_BYTES + 4] == FULL_ECHO_REQUEST:
+                        address = pack_address(peer[0])
+                        reply = data[:ECHO_HEADER_BYTES] + bytes([len(address)]) + address
+                        reply += b"m" * max(0, len(data) - len(reply))
+                    if packet_info:
+                        sock.sendmsg([reply], ancillary, 0, peer)
+                    else:
+                        sock.sendto(reply, peer)
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                import errno
+                UDP_HEALTH.update(errors=UDP_HEALTH["errors"] + 1, last_error=str(exc)[:160])
+                if exc.errno in (errno.EBADF, errno.ENOTSOCK) or stop_event.is_set():
+                    break
+                time.sleep(.01)
+    finally:
+        UDP_HEALTH["running"] = False
+        sock.close()
 
 
 def main():

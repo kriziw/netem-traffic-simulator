@@ -11,6 +11,7 @@ OBSERVED_SOURCE_HEADER = "X-NetEm-Observed-Source"
 # ask the target to append the observed source address to its echo. Probes without
 # it get the plain 12-byte echo, so older simulators and targets keep working.
 ADDRESS_REQUEST = b"NTA1"
+FULL_ECHO_REQUEST = b"NTF1"
 ECHO_HEADER_BYTES = 12
 
 

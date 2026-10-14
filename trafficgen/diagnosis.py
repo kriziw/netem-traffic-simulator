@@ -159,12 +159,11 @@ def _payload_ms(row):
 
 
 def _rate_mbps(row):
-    if _is_upload(row):
-        return row["bytes_up"] * 8 / (row["wait_ms"] * 1000) if row["wait_ms"] > 0 else None
-    size = row.get("response_length") or 0
-    if size >= BULK_BYTES and row["transfer_ms"] > 0:
-        return size * 8 / (row["transfer_ms"] * 1000)
-    return None
+    # Per-operation goodput uses the same full duration as scoring. Timing split
+    # remains available separately to investigate first-byte and body-transfer delays.
+    duration = row.get("response_time_ms") or 0
+    size = (row.get("bytes_up") if _is_upload(row) else row.get("response_length")) or 0
+    return size * 8 / (duration * 1000) if size >= BULK_BYTES and duration > 0 else None
 
 
 def _round(value, digits=1):
@@ -233,6 +232,10 @@ def application_detail(app, rows, scoring_policy=None):
                 for mode, item in MEDIA_MODES.items()
             },
         }
+        if scoring_policy and app in scoring_policy:
+            tolerance = scoring_policy[app].get("loss_max_pct", 0)
+            detail["media"]["configured_loss_max_pct"] = tolerance
+            detail["media"]["fail_by_policy"] = sum(_media_fails(row, tolerance) for row in bursts)
     return detail
 
 
@@ -243,7 +246,7 @@ def egress_breakdown(rows, scoring_policy=None, window_seconds=60):
         groups[row.get("egress") or UNKNOWN_EGRESS].append(row)
     result = {}
     for address, items in sorted(groups.items()):
-        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds)
+        summary = summarize_rows(items, policy=scoring_policy, window_seconds=window_seconds, scope="egress")
         apps = defaultdict(lambda: [0, 0, []])
         for row in items:
             counts = apps[row.get("application") or "other"]
@@ -296,7 +299,9 @@ def _media_findings(rows, applications, media_mode):
             continue
         app_rows = [row for row in rows if row.get("application") == app and row.get("packets_sent")]
         mode_label = MEDIA_MODES[media_mode]["label"].lower()
-        failing = media["fail_by_mode"].get(media_mode, 0)
+        failing = media.get("fail_by_policy", media["fail_by_mode"].get(media_mode, 0))
+        basis = (f"Configured loss target {media['configured_loss_max_pct']:g}%: {failing} bursts exceed the target"
+                 if "fail_by_policy" in media else f"In {mode_label} mode {failing} bursts fail")
         lossy = [row for row in app_rows if 0 < (row.get("packets_lost") or 0) < row["packets_sent"]]
         if lossy:
             availability = (media["bursts"] - failing) * 100.0 / media["bursts"]
@@ -304,7 +309,7 @@ def _media_findings(rows, applications, media_mode):
                 "media_loss", "bad" if availability < 95 else ("warn" if failing else "info"),
                 f"{_label(app)}: {len(lossy)} of {media['bursts']} bursts lost packets",
                 f"Packet loss {media['loss_pct']:.2f}% across {media['packets_sent']} packets. "
-                f"In {mode_label} mode {failing} bursts fail (strict {media['fail_by_mode']['strict']}, "
+                f"{basis} (comparison: strict {media['fail_by_mode']['strict']}, "
                 f"realistic {media['fail_by_mode']['realistic']}).",
                 lossy, [app], media_mode=media_mode, fail_by_mode=media["fail_by_mode"],
                 loss_pct=media["loss_pct"]))
@@ -313,7 +318,7 @@ def _media_findings(rows, applications, media_mode):
             findings.append(_finding(
                 "media_no_reply", "bad",
                 f"{_label(app)}: {len(silent)} of {media['bursts']} bursts got no reply",
-                "No echo came back within 0.5 s. Either the path dropped every packet, UDP replies are "
+                "No echo came back before the configured bounded collection expired. Either the path dropped every packet, UDP replies are "
                 "blocked, or the target answers from a different address than the one contacted "
                 "(the appliance then drops the reply).",
                 silent, [app]))
@@ -373,13 +378,14 @@ def _timing_findings(rows, applications):
     for app, items in by_app.items():
         detail = applications.get(app) or {}
         profile = APPLICATIONS.get(app, {})
+        target_ms = (applications.get(app, {}).get("experience_targets") or {}).get("deadline_ms", profile.get("latency_good_ms", 400))
         if detail.get("class") != "bulk" or len(items) < MIN_SAMPLES:
             continue
         p95 = percentile([row["response_time_ms"] for row in items], 0.95)
-        if p95 > profile.get("latency_good_ms", 400) and (detail.get("transfer_share") or 0) >= BANDWIDTH_SHARE:
+        if p95 > target_ms and (detail.get("transfer_share") or 0) >= BANDWIDTH_SHARE:
             uploads = sum(_payload_ms(row) for row in items if _is_upload(row))
             direction = "upload" if uploads * 2 > sum(_payload_ms(row) for row in items) else "download"
-            limited[direction].append((app, p95, profile.get("latency_poor_ms", 1800), items))
+            limited[direction].append((app, p95, 2 * target_ms, items))
     for direction, entries in limited.items():
         items = [row for entry in entries for row in entry[3]]
         rates = [rate for row in items if (rate := _rate_mbps(row)) is not None]
@@ -407,11 +413,12 @@ def _timing_findings(rows, applications):
     waiting = []
     for app, items in by_app.items():
         profile = APPLICATIONS.get(app, {})
+        target_ms = (applications.get(app, {}).get("experience_targets") or {}).get("deadline_ms", profile.get("latency_good_ms", 400))
         if _class(app) != "interactive" or len(items) < MIN_SAMPLES:
             continue
         p95_wait = percentile([row["wait_ms"] for row in items], 0.95)
-        if p95_wait > profile.get("latency_good_ms", 400):
-            waiting.append((app, p95_wait, profile.get("latency_poor_ms", 1800), items))
+        if p95_wait > target_ms:
+            waiting.append((app, p95_wait, 2 * target_ms, items))
     if waiting:
         items = [row for entry in waiting for row in entry[3]]
         worst = max(waiting, key=lambda entry: entry[1])

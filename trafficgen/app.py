@@ -516,7 +516,7 @@ def create_app():
             "dem.html",
             page="dem",
             status=status,
-            summary=with_target_finding(dem_summary(settings.database_path, run_id=run_id, window_seconds=60, media_mode=media_mode), status),
+            summary=with_target_finding(status["dem"], status),
             runs=recent_runs(settings.database_path, 12),
             experience_policy=load_policy(settings.database_path),
             experience_applications=profile_payload()["applications"],
@@ -531,9 +531,19 @@ def create_app():
                 if controller.status().get("status") in ("starting", "running", "stopping"):
                     raise ValueError("Stop the workload before changing experience targets.")
                 policy = load_policy(settings.database_path)
-                raw = {name: {key: (request.form.get(name + "." + key) == "on" if key == "critical"
-                                   else request.form.get(name + "." + key))
-                              for key in fields} for name, fields in policy.items()}
+                raw = {}
+                for name, fields in policy.items():
+                    values = dict(fields)
+                    for key in fields:
+                        field = name + "." + key
+                        if key == "critical":
+                            values[key] = request.form.get(field) == "on"
+                        elif field in request.form:
+                            values[key] = request.form[field] in ("on", "True", "true") if key == "hard_deadline" else request.form[field]
+                    if values["critical"] != fields["critical"]:
+                        values["criticality"] = "critical" if values["critical"] else "standard"
+                        values["criticality_weight"] = 4 if values["critical"] else 1
+                    raw[name] = values
                 save_policy(settings.database_path, raw)
             flash("Experience targets saved. Future measurements use these targets.", "success")
         except (ValueError, OSError) as exc:
@@ -561,7 +571,7 @@ def create_app():
             {
                 "timestamp": time.time(),
                 "users": status.get("users", 0),
-                "summary": with_target_finding(dem_summary(
+                "summary": with_target_finding(app.config["TRAFFICGEN_CONTROLLER"].query_dem(
                     settings.database_path,
                     run_id=run_id,
                     window_seconds=min(3600, minutes * 60),
@@ -1014,6 +1024,49 @@ def create_app():
         except RuntimeError as exc:
             return {'error': str(exc)}, 409
 
+    def requested_dem(status, window):
+        run = status.get("run") or {}
+        run_id = request.args.get("run_id") or run.get("run_id")
+        since, until = request.args.get("since"), request.args.get("until")
+        if (since is None) != (until is None):
+            raise ValueError("since and until must be supplied together.")
+        if since is not None and not run_id:
+            raise ValueError("Exact DEM intervals require run_id.")
+        if since is None and window == 60 and run_id == run.get("run_id") and status.get("dem"):
+            import copy
+            return copy.deepcopy(status["dem"])
+        # Drain already completed events before an exact historical query. Timeout is
+        # explicit evidence loss rather than silently returning a shifted rolling window.
+        if since is not None:
+            import gevent
+            try:
+                gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
+            except gevent.Timeout:
+                raise ValueError("Persistence has not caught up to the requested interval.") from None
+        summary = app.config["TRAFFICGEN_CONTROLLER"].query_dem(run_id=run_id,
+                            window_seconds=window, media_mode=run.get("media_mode", "strict"),
+                            since=float(since) if since is not None else None,
+                            until=float(until) if until is not None else None,
+                            intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
+        if since is None and run_id == run.get("run_id"):
+            live = status.get("dem") or {}
+            summary["in_flight"] = live.get("in_flight")
+            for issue in live.get("evidence_issues", []):
+                if issue not in summary["evidence_issues"]:
+                    summary["evidence_issues"].append(issue)
+            if summary["evidence_issues"]:
+                summary["scoring_complete"] = False
+        if status.get("dropped_transactions") or status.get("persistence_error"):
+            summary["business_acceptance"] = "unknown"
+            summary["critical_alerts"] = []
+            summary["scoring_complete"] = False
+            summary.setdefault("evidence_issues", []).append("persistence_unhealthy")
+        if summary.get("scoring_complete") is not True:
+            summary["score_status"] = "provisional"
+            if summary.get("business_acceptance") != "fail":
+                summary["business_acceptance"] = "unknown"
+        return summary
+
     @app.get("/api/v1/dem/summary")
     @bearer_required
     def api_dem_summary():
@@ -1024,16 +1077,13 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = offloaded(
-            dem_summary,
-            settings.database_path,
-            run_id=run_id,
-            window_seconds=window,
-            media_mode=media_mode,
-        )
+        try:
+            summary = requested_dem(status, window)
+        except (ValueError, OverflowError) as exc:
+            return {"error": str(exc)}, 400
         summary["active_users"] = status.get("users", 0)
         summary["workload_status"] = status.get("status", "idle")
-        summary["run_id"] = run_id
+        summary["run_id"] = request.args.get("run_id") or run_id
         return jsonify(summary)
 
     @app.get("/api/v1/dem/applications")
@@ -1046,7 +1096,10 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        try:
+            summary = requested_dem(status, window)
+        except (ValueError, OverflowError) as exc:
+            return {"error": str(exc)}, 400
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -1066,7 +1119,10 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        try:
+            summary = requested_dem(status, window)
+        except (ValueError, OverflowError) as exc:
+            return {"error": str(exc)}, 400
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
@@ -1087,7 +1143,10 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        try:
+            summary = requested_dem(status, window)
+        except (ValueError, OverflowError) as exc:
+            return {"error": str(exc)}, 400
         endpoints = list(summary["endpoints"].values())
         endpoints.sort(
             key=lambda item: (
@@ -1135,16 +1194,22 @@ def create_app():
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
-        summary = offloaded(dem_summary, settings.database_path, run_id=run_id, window_seconds=window, media_mode=media_mode)
+        try:
+            summary = requested_dem(status, window)
+        except (ValueError, OverflowError) as exc:
+            return {"error": str(exc)}, 400
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
-                "run_id": run_id,
+                "run_id": summary.get("run_id"),
                 "workload_status": status.get("status", "idle"),
                 "active_users": status.get("users", 0),
                 "window_seconds": summary["window_seconds"],
                 "requests": summary["requests"],
                 "truncated": summary["truncated"],
+                **{key: summary.get(key) for key in ("scoring_complete", "evidence_issues", "since", "until", "score_model",
+                    "policy_source", "application_contributions", "critical_alerts", "coverage_pct", "missing_measurements",
+                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score")},
                 "endpoint_experience": {
                     "score": summary["experience_score"],
                     "rating": summary["experience"],
