@@ -232,6 +232,10 @@ def application_detail(app, rows, scoring_policy=None):
                 for mode, item in MEDIA_MODES.items()
             },
         }
+        if scoring_policy and app in scoring_policy:
+            tolerance = scoring_policy[app].get("loss_max_pct", 0)
+            detail["media"]["configured_loss_max_pct"] = tolerance
+            detail["media"]["fail_by_policy"] = sum(_media_fails(row, tolerance) for row in bursts)
     return detail
 
 
@@ -295,7 +299,9 @@ def _media_findings(rows, applications, media_mode):
             continue
         app_rows = [row for row in rows if row.get("application") == app and row.get("packets_sent")]
         mode_label = MEDIA_MODES[media_mode]["label"].lower()
-        failing = media["fail_by_mode"].get(media_mode, 0)
+        failing = media.get("fail_by_policy", media["fail_by_mode"].get(media_mode, 0))
+        basis = (f"Configured loss target {media['configured_loss_max_pct']:g}%: {failing} bursts exceed the target"
+                 if "fail_by_policy" in media else f"In {mode_label} mode {failing} bursts fail")
         lossy = [row for row in app_rows if 0 < (row.get("packets_lost") or 0) < row["packets_sent"]]
         if lossy:
             availability = (media["bursts"] - failing) * 100.0 / media["bursts"]
@@ -303,7 +309,7 @@ def _media_findings(rows, applications, media_mode):
                 "media_loss", "bad" if availability < 95 else ("warn" if failing else "info"),
                 f"{_label(app)}: {len(lossy)} of {media['bursts']} bursts lost packets",
                 f"Packet loss {media['loss_pct']:.2f}% across {media['packets_sent']} packets. "
-                f"In {mode_label} mode {failing} bursts fail (strict {media['fail_by_mode']['strict']}, "
+                f"{basis} (comparison: strict {media['fail_by_mode']['strict']}, "
                 f"realistic {media['fail_by_mode']['realistic']}).",
                 lossy, [app], media_mode=media_mode, fail_by_mode=media["fail_by_mode"],
                 loss_pct=media["loss_pct"]))

@@ -1052,9 +1052,6 @@ class WorkloadController:
                 run["target_info"] = info
             run["configured_policy"] = copy.deepcopy(run["policy"])
             run["manifest"] = compile_manifest(run)
-            if run["media_mode"] == "strict":
-                for name in ("voice", "video", "ot_telemetry"):
-                    run["policy"][name]["loss_max_pct"] = 0
             runtime_config = run
             user_class = type(
                 "ConfiguredCorporateUser",
@@ -1228,9 +1225,6 @@ class WorkloadController:
             if "media_mode" in raw:
                 candidate["media_mode"] = validated_media_mode(raw["media_mode"])
                 candidate["policy"] = copy.deepcopy(candidate.get("configured_policy", candidate["policy"]))
-                if candidate["media_mode"] == "strict":
-                    for name in ("voice", "video", "ot_telemetry"):
-                        candidate["policy"][name]["loss_max_pct"] = 0
             for key, allowed in (("applications", APPLICATIONS), ("personas", PERSONAS)):
                 if key in raw:
                     candidate[key] = normalized_mix(raw[key], allowed)

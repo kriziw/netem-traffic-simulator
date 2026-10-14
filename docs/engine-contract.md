@@ -150,3 +150,7 @@ acceptance; mixed-version operation is transitional, not acceptance certificatio
 Mixed-version rollout is not supported for acceptance: an old platform can render
 v2 numbers but cannot enforce business_acceptance. The user selected a coordinated
 maintenance-window upgrade. Roll back simulator and platform together as well.
+
+Legacy strict/realistic media comparisons remain diagnostic references. They do not
+overwrite configured loss targets. Set loss_max_pct to zero explicitly for a
+zero-loss acceptance policy. Active findings use the frozen configured target.
