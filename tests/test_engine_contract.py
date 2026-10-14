@@ -142,3 +142,21 @@ def test_population_reconciliation_tolerates_users_whose_start_hook_has_not_run(
     controller._reconcile_population()
     assert controller.run["persona_claimed"] == {"knowledge_worker": 1}
     assert not started.sparse_user
+
+
+def test_phase_persistence_barrier_finishes_while_new_traffic_continues(simulator):
+    controller = simulator.config["TRAFFICGEN_CONTROLLER"]
+    stop = gevent.event.Event()
+    def produce():
+        while not stop.is_set():
+            controller.transaction_queue.put(row())
+            gevent.sleep(.001)
+    producer = gevent.spawn(produce)
+    try:
+        gevent.sleep(.01)
+        gevent.with_timeout(3, controller.flush_completed)
+        assert not producer.dead
+        assert dem_summary(controller.settings.database_path, "example", diagnosis=False)["requests"] > 0
+    finally:
+        stop.set()
+        producer.join()

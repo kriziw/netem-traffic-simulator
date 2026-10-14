@@ -592,22 +592,39 @@ class WorkloadController:
                         batch.append(self.transaction_queue.get_nowait())
                     except queue.Empty:
                         break
+                transactions = [entry for entry in batch if "_flush_event" not in entry]
                 started = time.perf_counter()
-                offloaded(record_transactions, self.settings.database_path, batch)
+                if transactions:
+                    offloaded(record_transactions, self.settings.database_path, transactions)
                 self._note_timing("write_ms", (time.perf_counter() - started) * 1000.0)
             except Exception as exc:
                 self.persistence_error = str(exc)[:240]
-                self.dropped_transactions += len(batch)
+                transactions = [entry for entry in batch if "_flush_event" not in entry]
+                self.dropped_transactions += len(transactions)
+                for entry in batch:
+                    if "_flush_event" in entry:
+                        entry["error"] = self.persistence_error
                 try:
-                    for failed_run in {entry.get("run_id") for entry in batch}:
+                    for failed_run in {entry.get("run_id") for entry in transactions}:
                         offloaded(record_data_loss, self.settings.database_path, failed_run,
-                                  sum(entry.get("run_id") == failed_run for entry in batch))
+                                  sum(entry.get("run_id") == failed_run for entry in transactions))
                 except Exception:
                     logging.exception("Cannot persist data-loss marker")
                 logging.exception("Cannot persist transactions")
             finally:
-                for _ in batch:
+                for entry in batch:
+                    if "_flush_event" in entry:
+                        entry["_flush_event"].set()
                     self.transaction_queue.task_done()
+
+    def flush_completed(self):
+        """FIFO persistence barrier: future completions cannot postpone a phase query."""
+        from gevent.event import Event
+        marker = {"_flush_event": Event()}
+        self.transaction_queue.put(marker)
+        marker["_flush_event"].wait()
+        if marker.get("error"):
+            raise ValueError("Completed measurements could not be persisted: " + marker["error"])
 
     def _dem_loop(self):
         while not self.stop_event.wait(2.0):

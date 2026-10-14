@@ -1040,7 +1040,7 @@ def create_app():
         if since is not None:
             import gevent
             try:
-                gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].transaction_queue.join)
+                gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
             except gevent.Timeout:
                 raise ValueError("Persistence has not caught up to the requested interval.") from None
         summary = offloaded(dem_summary, settings.database_path, run_id=run_id,
