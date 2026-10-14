@@ -408,6 +408,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     for key, item in app_summary.items():
         item["class"] = APPLICATIONS.get(key, {}).get("class", "interactive")
         item["configured_share"] = (shares or {}).get(key)
+        item["sampling_guidance"] = (contract or {}).get("manifest", {}).get("sampling_guidance", {}).get(key)
         item["weight"] = (overall.get("application_contributions", {}).get(key) or {}).get("weight")
     if diagnosis:
         for key, items in by_app.items():

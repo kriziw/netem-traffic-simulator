@@ -1059,6 +1059,10 @@ def create_app():
         if status.get("dropped_transactions") or status.get("persistence_error"):
             summary["scoring_complete"] = False
             summary.setdefault("evidence_issues", []).append("persistence_unhealthy")
+        if summary.get("scoring_complete") is not True:
+            summary["score_status"] = "provisional"
+            if summary.get("business_acceptance") != "fail":
+                summary["business_acceptance"] = "unknown"
         return summary
 
     @app.get("/api/v1/dem/summary")
@@ -1202,7 +1206,8 @@ def create_app():
                 "requests": summary["requests"],
                 "truncated": summary["truncated"],
                 **{key: summary.get(key) for key in ("scoring_complete", "evidence_issues", "since", "until", "score_model",
-                    "policy_source", "application_contributions", "critical_alerts", "coverage_pct", "missing_measurements")},
+                    "policy_source", "application_contributions", "critical_alerts", "coverage_pct", "missing_measurements",
+                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score")},
                 "endpoint_experience": {
                     "score": summary["experience_score"],
                     "rating": summary["experience"],

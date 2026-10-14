@@ -195,3 +195,13 @@ def test_legacy_shadow_does_not_control_primary_score():
     rows = [row()] * 108 + [row("voice", 100)] * 4 + [row("voice", 0, False)]
     assert legacy_summary(rows)["experience_score"] == 0
     assert summarize_rows(rows, application_shares={"web_saas": .95, "voice": .05})["experience_score"] > 90
+
+
+def test_manifest_warns_when_default_window_cannot_observe_sparse_application():
+    manifest = compile_manifest({"personas": {"knowledge_worker": 1}, "target_users": 1,
+                                 "applications": {"web_saas": 100, "erp": .001}, "activity": "light"})
+    # ERP is absent in this persona; sampling estimates must reflect executable apps only.
+    for key, guidance in manifest["sampling_guidance"].items():
+        assert key in manifest["application_shares"]
+        assert guidance["minimum_mean_window_s"] > 0
+    assert manifest["sampling_guidance"]["web_saas"]["sparse_in_60s"]

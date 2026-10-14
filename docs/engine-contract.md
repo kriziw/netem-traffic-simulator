@@ -89,7 +89,7 @@ observer overhead together; configuration alone is not proof of delivered capaci
   The admission tolerance is 5% plus one 256 KiB quantum over a 30-second window.
   This is a measurement tolerance, not a promise that an overloaded generator meets it.
 - `media_pattern: sustained` creates one-second synthetic packet windows throughout
-  `media_session_s` (default 30, range 1–300). Reply collection overlaps the next
+  `media_session_s` (default 30, range 1â€“300). Reply collection overlaps the next
   sending window and concurrency is bounded. Voice/video request equal-size echoes;
   cameras send synthetic upstream UDP payload. `bursts` retains compatibility.
   Neither mode claims a real codec, perceptual MOS or a DNS-protocol implementation.
@@ -119,3 +119,30 @@ observer overhead together; configuration alone is not proof of delivered capaci
 
 The complete deployed topology/kernel/offload/capacity acceptance matrix still requires
 an identified disposable lab. Passing unit and namespace tests does not certify it.
+
+
+## Compliance, coverage and rollout
+
+Ordinary latency compliance uses configured P95, not the maximum. Reliability and
+ordinary latency breaches are observations until there are at least three misses
+and the one-sided 95% Wilson lower bound exceeds the allowed miss fraction (5%
+for P95). Operations are the sampling unit, not correlated packets in one burst.
+This is a fixed-window evidence rule, not a causal or repeated-testing guarantee.
+Explicit hard deadlines retain zero tolerance. Alerts expose observation,
+violation and outage severity. Confirmed critical violations fail business
+acceptance even when another application lacks samples; observations cannot pass.
+
+A provisional headline describes only applications with sufficient measurement.
+`coverage_pct` is their configured criticality-weighted share. `score_range` bounds
+the full-workload score by assigning unknown applications 0 through 100. A
+provisional value cannot pass acceptance. Pending overdue work exposes `at_risk`,
+not a fabricated outage. Coverage is not the proportion of successful work.
+
+`legacy_score` is a one-release shadow calculation frozen from f0aea4c; it never
+controls v2 utility or acceptance. Existing site score thresholds remain policy
+choices, not calibrated equivalents of the legacy scale. Deploy controlled target
+first, simulator second, platform third. Sustained media refuses targets without
+`media-full-echo-v1` before starting a run. The target still supports legacy echo.
+Database additions are additive; back up the database before deployment and roll
+back consumers before simulator/target. Old readers do not understand v2
+acceptance; mixed-version operation is transitional, not acceptance certification.

@@ -1,5 +1,6 @@
 """One executable workload manifest shared by generation and scoring."""
-from .profiles import APPLICATIONS, PERSONAS
+import math
+from .profiles import APPLICATIONS, PERSONAS, ACTIVITY
 
 
 def allocate_counts(weights, users):
@@ -33,5 +34,15 @@ def compile_manifest(config, users=None):
         if config.get("sparse_slots"):
             shares["ot_telemetry"] = config["sparse_slots"] / (users or config["target_users"])
             shares["guest_internet"] -= shares["ot_telemetry"]
-    return {"persona_counts": counts, "application_shares": shares, "persona_applications": per_persona,
+    guidance = {}
+    if not config.get("paced_mbps"):
+        bounds = ACTIVITY.get(config.get("activity", "normal"), ACTIVITY["normal"])
+        mean_wait = (bounds["wait_min"] + bounds["wait_max"]) / 2
+        for app, share in shares.items():
+            upper_rate = sum(counts.values()) * share / mean_wait
+            guidance[app] = {"optimistic_transactions_per_60s": round(upper_rate * 60, 3),
+                             "minimum_mean_window_s": math.ceil(5 / upper_rate),
+                             "sparse_in_60s": upper_rate * 60 < 5,
+                             "basis": "zero service-time user model; real operation duration lowers arrivals; not a guarantee"}
+    return {"sampling_guidance": guidance, "persona_counts": counts, "application_shares": shares, "persona_applications": per_persona,
             "share_basis": "configured user activity", "version": 1}
