@@ -14,7 +14,9 @@ class RateScheduler:
 
     def __init__(self, config):
         self.config = config
-        self.jobs = Queue(maxsize=max(1, config["target_users"]))
+        # Reserve one slot per active direction so simultaneous low-rate arrivals
+        # are not discarded merely because a single free worker has not resumed.
+        self.jobs = Queue(maxsize=max(1, config["target_users"], sum(rate > 0 for rate in self.rates().values())))
         self.next_at = {}
         self.greenlet = None
         self.offered_bytes = 0

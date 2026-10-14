@@ -218,3 +218,16 @@ def test_single_worker_directional_admission_cannot_starve_uploads():
     assert admitted["up"] >= 8
     assert admitted["down"] >= 8
     assert scheduler.snapshot()["directions"]["up"]["offered_bytes"] == 10 * 256 * 1024
+
+
+def test_idle_single_worker_admits_both_simultaneous_directions():
+    scheduler = RateScheduler({"target_users": 1, "rate_down_mbps": 4.194304, "rate_up_mbps": 2.097152})
+    admitted = {"down": 0, "up": 0}
+    for tick in range(20):
+        scheduler.offer(tick / 2)
+        while not scheduler.jobs.empty():
+            direction, _, _ = scheduler.jobs.get_nowait()
+            admitted[direction] += 1
+            scheduler.jobs.task_done()
+    assert admitted == {"down": 20, "up": 10}
+    assert scheduler.missed_requests == 0
