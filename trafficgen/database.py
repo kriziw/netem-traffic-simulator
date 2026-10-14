@@ -201,6 +201,16 @@ def record_operation_events(path, items):
             [(item.get("run_id"), item["operation_id"], item["timestamp"], item["kind"], json.dumps(item)) for item in items])
 
 
+def target_timing_rows(path, run_id, since, until, intervals=None):
+    clauses, args = ["run_id=?", "kind='target_timing'", "timestamp>=?", "timestamp<?"], [run_id, since, until]
+    if intervals:
+        clauses.append('(' + ' OR '.join('(timestamp>=? AND timestamp<?)' for _ in intervals) + ')')
+        args.extend(value for interval in intervals for value in interval)
+    with connect(path) as conn:
+        rows = conn.execute(f"SELECT payload FROM operation_events WHERE {' AND '.join(clauses)} ORDER BY timestamp LIMIT 100001", args).fetchall()
+    return [json.loads(row['payload']) for row in rows]
+
+
 def operation_evidence(path, run_id, since, until):
     with connect(path) as conn:
         rows = conn.execute("SELECT kind, count(*) AS n FROM operation_events WHERE run_id=? AND timestamp>=? AND timestamp<? GROUP BY kind",
@@ -211,11 +221,15 @@ def operation_evidence(path, run_id, since, until):
             WHERE s.run_id=? AND s.kind='started' AND s.timestamp<? AND NOT EXISTS
             (SELECT 1 FROM operation_events e WHERE e.run_id=s.run_id AND e.operation_id=s.operation_id
              AND e.kind IN ('completed','cancelled') AND e.timestamp<?)""", (run_id, until, until)).fetchone()[0]
-        overdue = conn.execute("""SELECT count(*) FROM operation_events s WHERE s.run_id=? AND s.kind='deadline_expired'
+        overdue_rows = conn.execute("""SELECT json_extract(s.payload, '$.application') AS application, count(*) AS n
+            FROM operation_events s WHERE s.run_id=? AND s.kind='deadline_expired'
             AND s.timestamp<? AND NOT EXISTS (SELECT 1 FROM operation_events e WHERE e.run_id=s.run_id
-            AND e.operation_id=s.operation_id AND e.kind IN ('completed','cancelled') AND e.timestamp<?)""",
-            (run_id, until, until)).fetchone()[0]
-    return {"overdue_at_end": overdue, "events": {row["kind"]: row["n"] for row in rows}, "outstanding_at_end": outstanding,
+            AND e.operation_id=s.operation_id AND e.kind IN ('completed','cancelled') AND e.timestamp<?)
+            GROUP BY json_extract(s.payload, '$.application')""",
+            (run_id, until, until)).fetchall()
+    overdue_by_app = {row['application'] or 'unknown': row['n'] for row in overdue_rows}
+    return {"overdue_at_end": sum(overdue_by_app.values()), "overdue_by_application": overdue_by_app,
+            "events": {row["kind"]: row["n"] for row in rows}, "outstanding_at_end": outstanding,
             "clock_discontinuities": clocks}
 
 

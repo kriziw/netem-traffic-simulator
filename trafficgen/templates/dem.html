@@ -27,10 +27,12 @@
 <div class="grid grid-4">
   <div class="stat"><span>Experience</span><strong id="dem-score">{{ summary.experience_score if summary.experience_score is not none else '—' }}</strong><small id="dem-rating">{{ summary.experience }}</small></div>
   <div class="stat"><span>Availability</span><strong id="dem-availability">{% if summary.availability_pct is not none %}{{ "%.2f"|format(summary.availability_pct) }}%{% else %}—{% endif %}</strong><small>successful synthetic transactions</small></div>
-  <div class="stat"><span>Interactive P95</span><strong id="dem-p95">{{ "%.0f"|format(summary.interactive_p95_ms) if summary.interactive_p95_ms is not none else '—' }} ms</strong><small id="dem-p95-all">web, collaboration, DNS · all apps {{ "%.0f"|format(summary.p95_ms) if summary.p95_ms is not none else '—' }} ms</small></div>
+  <div class="stat"><span>Application completion · P95</span><strong id="dem-p95">{{ "%.0f"|format(summary.interactive_p95_ms) if summary.interactive_p95_ms is not none else '—' }} ms</strong><small id="dem-p95-all">web, collaboration, DNS · all apps {{ "%.0f"|format(summary.p95_ms) if summary.p95_ms is not none else '—' }} ms</small></div>
   <div class="stat"><span>Active users</span><strong id="dem-users">{{ status.users }}</strong><small>{{ status.status }}</small></div>
 </div>
 
+<p>Application completion includes request upload, target processing and response transfer; it is not network latency.</p>
+<p id="dem-network-timing">Target agent RTD/RTT is measured by a small UDP echo over the workload path. One-way network latency is not measured.</p>
 <section class="card space-top">
   <div class="card-head">
     <div><div class="card-title">Why experience is degraded</div><div class="card-sub">Live findings from the selected window · worst first · the WAN is the appliance address the target saw</div></div>

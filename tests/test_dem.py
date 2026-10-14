@@ -46,10 +46,11 @@ def test_dem_summary_tracks_endpoint_persona_and_application(tmp_path: Path):
     assert "knowledge_worker" in summary["personas"]
     assert "ep-1" in summary["endpoints"]
     assert summary["endpoints"]["ep-1"]["persona"] == "knowledge_worker"
-    assert summary["experience_score"] is None
-    assert summary["applications"]["web_saas"]["experience_score"] is None
-    assert summary["personas"]["knowledge_worker"]["experience_score"] is None
-    assert summary["endpoints"]["ep-1"]["experience_score"] is None
+    assert summary["experience_score"] == 50.51
+    assert not summary["scoring_complete"]
+    assert summary["applications"]["web_saas"]["experience_score"] == 50.51
+    assert summary["personas"]["knowledge_worker"]["experience_score"] == 50.51
+    assert summary["endpoints"]["ep-1"]["experience_score"] == 50.51
 
 
 def transaction(application, latency=100, success=True):
@@ -69,9 +70,11 @@ def test_business_application_cannot_be_hidden_by_healthy_bulk_traffic():
 
 def test_insufficient_failed_only_application_does_not_claim_a_site_outage():
     rows = [transaction("web_saas")] * 1000 + [transaction("erp", success=False)]
-    assert summarize_rows(rows)["experience_score"] == 100
+    assert summarize_rows(rows)["experience_score"] == 50
     assert summarize_rows(rows)["score_status"] == "provisional"
-    assert summarize_rows(rows)["coverage_pct"] == 50
+    assert summarize_rows(rows)["coverage_pct"] == 100
+    assert summarize_rows(rows)["evidence_coverage_pct"] == 50
+    assert summarize_rows(rows)["business_acceptance"] == "unknown"
     assert summarize_rows(rows)["scoring_complete"] is False
 
 
