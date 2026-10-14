@@ -1,0 +1,9 @@
+# Live experience windows
+
+Workload starts accept `live_window_seconds`, an integer from 5 to 120 (default 15). Live status and DEM endpoints without an explicit interval/window use that selected scope. The worker publishes once per second. The actual observed duration can be shorter while a run or phase is starting; `configured_window_seconds` retains the chosen setting, and `collecting_evidence` describes incomplete evidence. Sample minima, statistical compliance, hard deadlines and workload/criticality weights are unchanged.
+
+Controller heartbeat accepts optional `live_context` with `phase_id`, `window_seconds` and `paused`. A new phase identity establishes a lower observation boundary on the executing agent's clock when acknowledged. Periodic heartbeats for the same phase do not move it. Cache revisions prevent a previous phase's snapshot from being returned as current. Pausing freezes the end; resuming starts a fresh live segment, excluding paused traffic. `{"reset": true}` clears the temporary test context and restores the workload's original live window (important for borrowed workloads).
+
+Live context is persisted separately from immutable scoring contracts. It does not delete transactions, regrade past data, or change exact historical `since`/`until`/`intervals` queries. Final reports must continue requesting the full phase with explicit bounds, including disjoint active intervals for paused phases.
+
+Deploy the platform and simulator companions together for phase-scoped tests. Older heartbeat clients remain supported, but cannot establish the new phase boundaries. Low transaction rates may still produce provisional scores; a shorter window does not create evidence or convert a single ordinary miss into confirmed noncompliance. Existing in-flight overdue-operation observations can appear before transaction timeouts.

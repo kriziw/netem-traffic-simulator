@@ -332,7 +332,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
 
     now = time.time()
     end = now if until is None else float(until)
-    start = end - max(10, min(3600, float(window_seconds))) if since is None else float(since)
+    start = end - max(5, min(3600, float(window_seconds))) if since is None else float(since)
     if not math.isfinite(start) or not math.isfinite(end) or start >= end or end > now + .1 or end - start > 86400:
         raise ValueError("DEM requires a finite past interval, start < end, at most 24 hours.")
     if intervals is not None:

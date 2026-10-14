@@ -105,6 +105,7 @@ def init_db(path: Path):
                 payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_contract_run ON run_contracts(run_id, effective_at);
+            CREATE TABLE IF NOT EXISTS live_contexts (run_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS run_health (run_id TEXT PRIMARY KEY, dropped INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS dem_queries (key TEXT PRIMARY KEY, created REAL NOT NULL,
                 arguments TEXT NOT NULL, result TEXT);
@@ -355,6 +356,7 @@ def prune_history(path: Path, retention_days: int = 7):
         conn.execute("DELETE FROM runs WHERE ended_at < ?", (cutoff,))
         conn.execute("DELETE FROM run_contracts WHERE run_id NOT IN (SELECT run_id FROM runs)")
         conn.execute("DELETE FROM run_health WHERE run_id NOT IN (SELECT run_id FROM runs)")
+        conn.execute("DELETE FROM live_contexts WHERE run_id NOT IN (SELECT run_id FROM runs)")
 
 
 def update_run(path: Path, run: dict):
