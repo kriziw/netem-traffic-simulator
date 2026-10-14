@@ -205,3 +205,16 @@ def test_manifest_warns_when_default_window_cannot_observe_sparse_application():
         assert key in manifest["application_shares"]
         assert guidance["minimum_mean_window_s"] > 0
     assert manifest["sampling_guidance"]["web_saas"]["sparse_in_60s"]
+
+
+def test_single_worker_directional_admission_cannot_starve_uploads():
+    scheduler = RateScheduler({"target_users": 1, "rate_down_mbps": 4.194304, "rate_up_mbps": 2.097152})
+    admitted = {"down": 0, "up": 0}
+    for tick in range(20):
+        scheduler.offer(tick / 2)
+        direction, _, _ = scheduler.jobs.get_nowait()
+        admitted[direction] += 1
+        scheduler.jobs.task_done()
+    assert admitted["up"] >= 8
+    assert admitted["down"] >= 8
+    assert scheduler.snapshot()["directions"]["up"]["offered_bytes"] == 10 * 256 * 1024

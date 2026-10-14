@@ -1,4 +1,4 @@
-"""Bounded open-loop download demand. Demand never waits for a response.
+"""Bounded open-loop directional payload demand. Demand never waits for a response.
 
 The generator records missed admissions instead of silently reducing the offered
 rate when all workers are busy. Wire throughput remains a separate measurement.
@@ -25,14 +25,13 @@ class RateScheduler:
         self.direction_counts = {direction: {"offered_bytes": 0, "admitted_bytes": 0, "missed_requests": 0}
                                  for direction in self.started_bytes}
         self.started_at = time.monotonic()
-        self.turn = 0
+        self.last_admitted = {"down": float("-inf"), "up": float("-inf")}
 
     def offer(self, now):
         waits = []
-        directions = list(self.rates().items())
-        self.turn += 1
-        if self.turn % 2 == 0:
-            directions.reverse()
+        # Alternate successful admissions, not wakeups: commensurate rates can
+        # otherwise present simultaneous arrivals on the same turn forever.
+        directions = sorted(self.rates().items(), key=lambda item: self.last_admitted[item[0]])
         for direction, rate in directions:
             if not rate:
                 continue
@@ -46,6 +45,7 @@ class RateScheduler:
                 try:
                     self.jobs.put_nowait((direction, self.chunk_kb, now))
                     counts["admitted_bytes"] += self.chunk_kb * 1024
+                    self.last_admitted[direction] = now
                 except Full:
                     counts["missed_requests"] += 1
                 self.next_at[direction] += count * interval
