@@ -140,9 +140,13 @@ not a fabricated outage. Coverage is not the proportion of successful work.
 
 `legacy_score` is a one-release shadow calculation frozen from f0aea4c; it never
 controls v2 utility or acceptance. Existing site score thresholds remain policy
-choices, not calibrated equivalents of the legacy scale. Deploy controlled target
-first, simulator second, platform third. Sustained media refuses targets without
+choices, not calibrated equivalents of the legacy scale. Upgrade target, simulator and platform together in a maintenance window. Resume
+acceptance only after all components advertise the new contract. Sustained media refuses targets without
 `media-full-echo-v1` before starting a run. The target still supports legacy echo.
 Database additions are additive; back up the database before deployment and roll
 back consumers before simulator/target. Old readers do not understand v2
 acceptance; mixed-version operation is transitional, not acceptance certification.
+
+Mixed-version rollout is not supported for acceptance: an old platform can render
+v2 numbers but cannot enforce business_acceptance. The user selected a coordinated
+maintenance-window upgrade. Roll back simulator and platform together as well.
