@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.4...v1.0.0) (2026-10-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* score configured workload utility and repair traffic mechanics ([#70](https://github.com/kriziw/netem-traffic-simulator/issues/70))
+
+### Features
+
+* score configured workload utility and repair traffic mechanics ([#70](https://github.com/kriziw/netem-traffic-simulator/issues/70)) ([3f5c50b](https://github.com/kriziw/netem-traffic-simulator/commit/3f5c50bc65d69be8ab225d80491196ee9e9aa7f2))
+
 ## [0.19.4](https://github.com/kriziw/netem-traffic-simulator/compare/v0.19.3...v0.19.4) (2026-10-13)
 
 
