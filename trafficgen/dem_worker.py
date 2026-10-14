@@ -17,8 +17,9 @@ from pathlib import Path
 
 from .database import connect, write_dem_snapshot
 from .dem import dem_summary
+from . import live_window
 
-SNAPSHOT_INTERVAL_S = 2.0     # how often the active run's DEM is recomputed
+SNAPSHOT_INTERVAL_S = 1.0     # how often the active run's DEM is recomputed
 SNAPSHOT_MAX_AGE_S = 6.0      # older than this, the workload computes the DEM itself rather than showing stale figures
 
 
@@ -37,7 +38,9 @@ def publish_once(database_path, now=None):
     run_id, media_mode = active_run(database_path)
     dem = None
     if run_id is not None:
-        dem = dem_summary(Path(database_path), run_id=run_id, window_seconds=60, media_mode=media_mode or "strict")
+        context = live_window.read_context(database_path, run_id)
+        dem = (live_window.measure(database_path, run_id, context, media_mode or 'strict') if context else
+               dem_summary(Path(database_path), run_id=run_id, media_mode=media_mode or 'strict', window_seconds=15))
     snapshot = {"created": time.time() if now is None else now, "run_id": run_id, "dem": dem,
                 "created_monotonic": time.monotonic(),
                 "compute_ms": round((time.perf_counter() - started) * 1000.0, 1)}
@@ -45,9 +48,11 @@ def publish_once(database_path, now=None):
     return snapshot
 
 
-def fresh_snapshot(snapshot, run_id, now=None, contract_epoch=None):
+def fresh_snapshot(snapshot, run_id, now=None, contract_epoch=None, live_revision=None):
     """The published snapshot when it is for this run and recent enough to show; otherwise None."""
     if not snapshot or snapshot.get("run_id") != run_id or not snapshot.get("dem"):
+        return None
+    if live_revision is not None and snapshot['dem'].get('live_context_revision') != live_revision:
         return None
     if contract_epoch is not None and snapshot["dem"].get("contract_epoch") != contract_epoch:
         return None

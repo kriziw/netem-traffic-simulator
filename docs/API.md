@@ -142,6 +142,8 @@ Besides the generic applications, the catalog includes industry applications tha
 
 ## Digital Experience Monitoring
 
+Live workload status defaults to 15 seconds. Set `live_window_seconds` (integer 5–120) at workload start to choose another window. DEM endpoints without `window` use the selected live scope, including the current acknowledged phase boundary. Explicit `window=60` and exact historical `since`/`until`/`intervals` queries remain available for reports. See [Live experience windows](live-experience-window.md) for the controller heartbeat contract.
+
 The DEM API is designed for NetEm and other controllers that want to understand simulated endpoint experience, not just generated traffic volume.
 
 ### `GET /api/v1/dem/experience?window=60`

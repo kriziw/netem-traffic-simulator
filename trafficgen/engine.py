@@ -34,6 +34,7 @@ from .database import (
     update_run,
 )
 from .database import read_dem_snapshot
+from . import live_window
 from .dem import dem_summary
 from .database import save_contract, record_data_loss
 from .experience_policy import load_policy, validate_policy, SCORE_MODEL
@@ -742,7 +743,7 @@ class WorkloadController:
             raise ValueError("Completed measurements could not be persisted: " + marker["error"])
 
     def _dem_loop(self):
-        while not self.stop_event.wait(2.0):
+        while not self.stop_event.wait(1.0):
             with self.lock:
                 run = copy.deepcopy(self.run)
                 runner = self.runner
@@ -752,11 +753,11 @@ class WorkloadController:
                 if self.dem_worker is not None and self.dem_worker.poll() is not None and time.monotonic() - self.last_worker_restart > 10:
                     self.last_worker_restart = time.monotonic()
                     self.dem_worker = self._start_dem_worker()
-                snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"))
+                snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"), live_revision=(run.get("live_context") or {}).get("revision"))
                 if snapshot is None:
                     # The worker has not published this run recently: sample a DEM computed here, off the event loop.
-                    summary = self.query_dem(run_id=run["run_id"],
-                                        window_seconds=60, diagnosis=False)
+                    summary = live_window.measure(self.settings.database_path, run["run_id"], run["live_context"],
+                                                  media_mode=run.get("media_mode", "strict"), query=self.query_dem, diagnosis=False)
                 elif snapshot["created"] == self.last_sampled:
                     continue
                 else:
@@ -921,21 +922,23 @@ class WorkloadController:
     def _live_dem(self, run):
         """The DEM of the active run: the worker's snapshot while it is fresh, otherwise computed off the event loop."""
         with self.dem_lock:
-            snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"))
+            snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"), live_revision=(run.get("live_context") or {}).get("revision"))
             if snapshot is not None:
                 return snapshot["dem"]
             cached = self.last_live_dem
-            if cached and cached[0] == run["run_id"] and 0 <= time.monotonic() - cached[1] < 2:
+            if cached and cached[0] == (run["run_id"], (run.get("live_context") or {}).get("revision")) and 0 <= time.monotonic() - cached[1] < 1:
                 return copy.deepcopy(cached[2])
-            result = self.query_dem(run_id=run["run_id"], window_seconds=60,
-                               media_mode=run.get("media_mode", "strict"))
-            self.last_live_dem = (run["run_id"], time.monotonic(), copy.deepcopy(result))
+            context = run.get("live_context") or live_window.read_context(self.settings.database_path, run['run_id'])
+            result = (live_window.measure(self.settings.database_path, run['run_id'], context,
+                      media_mode=run.get('media_mode', 'strict'), query=self.query_dem) if context else
+                      self.query_dem(run_id=run['run_id'], window_seconds=15, media_mode=run.get('media_mode', 'strict')))
+            self.last_live_dem = ((run["run_id"], (context or {}).get('revision')), time.monotonic(), copy.deepcopy(result))
             return result
 
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed", "rate_down_mbps", "rate_up_mbps", "completion_grace_s", "media_pattern", "media_session_s"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed", "rate_down_mbps", "rate_up_mbps", "completion_grace_s", "media_pattern", "media_session_s", "live_window_seconds"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -1017,6 +1020,7 @@ class WorkloadController:
             "applications": applications,
             "media_mode": media_mode,
             "media_pattern": media_pattern,
+            "live_window_seconds": live_window.window_seconds(raw.get("live_window_seconds", 15)),
             "media_session_s": bounded_number(raw.get("media_session_s", 30), "media_session_s", 1, 300, integer=True),
             # Describes what the run represents, e.g. the site NetEm modelled it on.
             "label": (label or "").strip() or None,
@@ -1070,6 +1074,7 @@ class WorkloadController:
 
             try:
                 create_run(self.settings.database_path, run)
+                run["live_context"] = live_window.initialize(self.settings.database_path, run)
                 save_contract(self.settings.database_path, run, run["started_at"])
             except Exception:
                 runner.quit()
@@ -1256,12 +1261,15 @@ class WorkloadController:
             self.run['controller_lease_seconds'] = seconds
         gevent.spawn(self._watch_controller_lease, run_id)
 
-    def controller_heartbeat(self, run_id, phase=''):
+    def controller_heartbeat(self, run_id, phase='', live_context=None):
         with self.lock:
             if not self.run or self.run['run_id'] != run_id or self.run.get('status') not in ('starting', 'running'):
                 raise RuntimeError('The executing workload no longer matches the controller test.')
             if self.controller_lease and self.controller_lease['run_id'] == run_id:
                 self.controller_lease['deadline'] = time.monotonic() + self.controller_lease['seconds']
+            if live_context is not None:
+                self.run['live_context'] = offloaded(live_window.change_context, self.settings.database_path, run_id, self.run['live_context'], live_context)
+                self.last_live_dem = None
             self.run['controller_phase'] = phase
         return self.status()
 
@@ -1326,7 +1334,7 @@ class WorkloadController:
                 "status": "idle",
                 "run": None,
                 "users": 0,
-                "dem": self.query_dem(window_seconds=60),
+                "dem": self.query_dem(window_seconds=15),
             }
         started = time.perf_counter()
         dem = self._live_dem(run)

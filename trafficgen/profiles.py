@@ -452,7 +452,7 @@ def normalized_mix(values: dict, allowed: dict) -> dict:
 
 def profile_payload():
     return {
-        "engine_capabilities": ["workload-utility-v2", "exact-dem-window", "rate-mode", "directional-rate-v1", "active-dem-intervals", "packet-histograms", "sustained-synthetic-media"],
+        "engine_capabilities": ["phase-live-window-v1", "workload-utility-v2", "exact-dem-window", "rate-mode", "directional-rate-v1", "active-dem-intervals", "packet-histograms", "sustained-synthetic-media"],
         "profiles": WORKLOAD_PROFILES,
         "personas": PERSONAS,
         "applications": APPLICATIONS,

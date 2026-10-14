@@ -43,7 +43,7 @@ from .diagnosis import target_finding
 from .engine import WorkloadController
 from .offload import offloaded
 from .profiles import profile_payload
-from . import maintenance
+from . import maintenance, live_window
 from . import remote_target
 from . import traffic_paths
 from . import network_setup
@@ -480,6 +480,7 @@ def create_app():
             "activity": request.form.get("activity"),
             "pattern": request.form.get("pattern"),
             "target": request.form.get("target"),
+            "live_window_seconds": request.form.get("live_window_seconds") or 15,
             "media_mode": request.form.get("media_mode") or "strict",
         }
         try:
@@ -1022,12 +1023,14 @@ def create_app():
     @bearer_required
     def controller_heartbeat():
         raw = request.get_json(silent=True) or {}
-        if (not isinstance(raw, dict) or set(raw) - {'run_id', 'phase'}
+        if (not isinstance(raw, dict) or set(raw) - {'run_id', 'phase', 'live_context'}
                 or not isinstance(raw.get('run_id'), str) or not raw['run_id']
                 or not isinstance(raw.get('phase', ''), str) or len(raw.get('phase', '')) > 120):
             return {'error': 'Invalid controller heartbeat.'}, 400
         try:
-            return jsonify(app.config['TRAFFICGEN_CONTROLLER'].controller_heartbeat(raw['run_id'], raw.get('phase', '')))
+            return jsonify(app.config['TRAFFICGEN_CONTROLLER'].controller_heartbeat(raw['run_id'], raw.get('phase', ''), raw.get('live_context')))
+        except ValueError as exc:
+            return {'error': str(exc)}, 400
         except RuntimeError as exc:
             return {'error': str(exc)}, 409
 
@@ -1039,7 +1042,7 @@ def create_app():
             raise ValueError("since and until must be supplied together.")
         if since is not None and not run_id:
             raise ValueError("Exact DEM intervals require run_id.")
-        if since is None and window == 60 and run_id == run.get("run_id") and status.get("dem"):
+        if since is None and ("window" not in request.args or window == (status.get("dem") or {}).get("configured_window_seconds", 15)) and run_id == run.get("run_id") and status.get("dem"):
             import copy
             return copy.deepcopy(status["dem"])
         # Drain already completed events before an exact historical query. Timeout is
@@ -1050,11 +1053,19 @@ def create_app():
                 gevent.with_timeout(5, app.config["TRAFFICGEN_CONTROLLER"].flush_completed)
             except gevent.Timeout:
                 raise ValueError("Persistence has not caught up to the requested interval.") from None
-        summary = app.config["TRAFFICGEN_CONTROLLER"].query_dem(run_id=run_id,
-                            window_seconds=window, media_mode=run.get("media_mode", "strict"),
-                            since=float(since) if since is not None else None,
-                            until=float(until) if until is not None else None,
-                            intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
+        controller = app.config["TRAFFICGEN_CONTROLLER"]
+        context = run.get('live_context') or {}
+        if since is None and run_id == run.get('run_id') and context.get('phase_id'):
+            # Explicit rolling windows used by assertions still belong to this
+            # phase. Only an explicit historical interval may cross its boundary.
+            summary = live_window.measure(settings.database_path, run_id, dict(context, window_seconds=window),
+                media_mode=run.get('media_mode', 'strict'), query=controller.query_dem)
+        else:
+            summary = controller.query_dem(run_id=run_id,
+                                window_seconds=window, media_mode=run.get("media_mode", "strict"),
+                                since=float(since) if since is not None else None,
+                                until=float(until) if until is not None else None,
+                                intervals=json.loads(request.args["intervals"]) if "intervals" in request.args else None)
         if since is None and run_id == run.get("run_id"):
             live = status.get("dem") or {}
             summary["in_flight"] = live.get("in_flight")
@@ -1078,9 +1089,9 @@ def create_app():
     @bearer_required
     def api_dem_summary():
         try:
-            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            window = max(5, min(3600, int(request.args.get("window", "15"))))
         except ValueError:
-            return {"error": "window must be an integer from 10 to 3600 seconds."}, 400
+            return {"error": "window must be an integer from 5 to 3600 seconds."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
         run_id = status.get("run", {}).get("run_id") if status.get("run") else None
         media_mode = (status.get("run") or {}).get("media_mode", "strict")
@@ -1097,7 +1108,7 @@ def create_app():
     @bearer_required
     def api_dem_applications():
         try:
-            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            window = max(5, min(3600, int(request.args.get("window", "15"))))
         except ValueError:
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
@@ -1110,7 +1121,7 @@ def create_app():
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
-                "window_seconds": window,
+                "window_seconds": summary["window_seconds"],
                 "run_id": run_id,
                 "applications": summary["applications"],
             }
@@ -1120,7 +1131,7 @@ def create_app():
     @bearer_required
     def api_dem_personas():
         try:
-            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            window = max(5, min(3600, int(request.args.get("window", "15"))))
         except ValueError:
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
@@ -1133,7 +1144,7 @@ def create_app():
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
-                "window_seconds": window,
+                "window_seconds": summary["window_seconds"],
                 "run_id": run_id,
                 "personas": summary["personas"],
             }
@@ -1143,7 +1154,7 @@ def create_app():
     @bearer_required
     def api_dem_endpoints():
         try:
-            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            window = max(5, min(3600, int(request.args.get("window", "15"))))
             limit = max(1, min(1000, int(request.args.get("limit", "200"))))
         except ValueError:
             return {"error": "window/limit must be integers."}, 400
@@ -1164,7 +1175,7 @@ def create_app():
         return jsonify(
             {
                 "timestamp": summary["timestamp"],
-                "window_seconds": window,
+                "window_seconds": summary["window_seconds"],
                 "run_id": run_id,
                 "endpoints": endpoints[:limit],
             }
@@ -1195,7 +1206,7 @@ def create_app():
     def api_dem_experience():
         # Purpose-built DEM endpoint for NetEm and external integrations.
         try:
-            window = max(10, min(3600, int(request.args.get("window", "60"))))
+            window = max(5, min(3600, int(request.args.get("window", "15"))))
         except ValueError:
             return {"error": "window must be an integer."}, 400
         status = app.config["TRAFFICGEN_CONTROLLER"].status()
@@ -1216,7 +1227,7 @@ def create_app():
                 "truncated": summary["truncated"],
                 **{key: summary.get(key) for key in ("scoring_complete", "evidence_issues", "since", "until", "score_model",
                     "policy_source", "application_contributions", "critical_alerts", "coverage_pct", "missing_measurements",
-                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score")},
+                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score", "configured_window_seconds", "live_phase_id", "live_context_revision", "window_scope", "collecting_evidence", "live_paused")},
                 "endpoint_experience": {
                     "score": summary["experience_score"],
                     "rating": summary["experience"],
