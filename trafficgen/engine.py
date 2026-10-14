@@ -1268,7 +1268,7 @@ class WorkloadController:
             if self.controller_lease and self.controller_lease['run_id'] == run_id:
                 self.controller_lease['deadline'] = time.monotonic() + self.controller_lease['seconds']
             if live_context is not None:
-                self.run['live_context'] = live_window.change_context(self.settings.database_path, run_id, self.run['live_context'], live_context)
+                self.run['live_context'] = offloaded(live_window.change_context, self.settings.database_path, run_id, self.run['live_context'], live_context)
                 self.last_live_dem = None
             self.run['controller_phase'] = phase
         return self.status()
