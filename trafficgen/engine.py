@@ -401,7 +401,9 @@ class CorporateUser(HttpUser):
         # the intentional one-second pacing duration or local send success.
         context = self._context(application)
         context.update(operation_id=uuid.uuid4().hex, started_at=time.time())
-        operation = Operation(self.runtime_config, context, getattr(self.environment, "operation_event", None))
+        monitoring = getattr(self, 'application_check', False)
+        operation = Operation(self.runtime_config, context, getattr(self.environment, "operation_event", None),
+                              pacing_ms=packets * interval * 1000 if monitoring else 0)
         cancelled = False
         nonce = uuid.uuid4().bytes[:8]
         sent_times = {}
@@ -461,14 +463,17 @@ class CorporateUser(HttpUser):
 
 
             receiver = gevent.spawn(receive)
+            from .application_checks import packet_wait
             send_origin = time.perf_counter()
             for sequence in range(packets):
                 payload = (nonce + struct.pack("!I", sequence) + (FULL_ECHO_REQUEST if full_echo else ADDRESS_REQUEST)
                            + b"m" * (packet_size - ECHO_HEADER_BYTES - len(ADDRESS_REQUEST)))
                 sent_at = time.perf_counter()
+                if monitoring and sent_times and sent_at - sent_times[sequence - 1] > interval + max(.05, interval):
+                    operation.event('application_check_generator_lag')
                 sock.send(payload)
                 sent_times[sequence] = sent_at
-                gevent.sleep(max(0, send_origin + (sequence + 1) * interval - time.perf_counter()))
+                gevent.sleep(packet_wait(interval, send_origin, sequence, time.perf_counter(), monitoring))
             targets = self.runtime_config.get("policy", {}).get(application, {})
             collection_s = max(.5, min(10.0, targets.get("deadline_ms", 500) / 1000 * 2))
             deadline = time.perf_counter() + collection_s
@@ -619,6 +624,41 @@ class CorporateUser(HttpUser):
         self._download("guest_internet", "guest/download", "/files/download", [1024, 2048, 3072, 4096])
 
 
+class ApplicationCheckUser(CorporateUser):
+    """Uses the same target, source binding and evidence path as employee tasks.
+
+    These workers are deliberately outside the Locust employee population.
+    """
+    abstract = True
+    application_check = True
+
+    def _claim_persona(self, cfg):
+        return 'application_monitor'
+
+    def on_start(self):
+        super().on_start()
+        self.endpoint_id = 'check-' + uuid.uuid4().hex[:10]
+
+    def on_stop(self):
+        self.client.close()
+
+    def _bounded_request(self, request):
+        from .application_checks import bound_request
+        bounded = super()._bounded_request(request)
+
+        def checked(*args, **kwargs):
+            args, kwargs = bound_request(args, kwargs)
+            return bounded(*args, **kwargs)
+        return checked
+
+    def _udp_burst(self, application, packet_size, packets, interval, full_echo=False):
+        return super()._udp_burst(application, packet_size, min(packets, 8), interval, full_echo)
+
+    def _media_action(self, application, packet_size, packets, interval, camera=False):
+        # Monitoring uses short bursts even alongside sustained employee media.
+        return self._udp_burst(application, packet_size, packets, interval)
+
+
 class WorkloadController:
     def __init__(self, settings):
         self.settings = settings
@@ -634,6 +674,7 @@ class WorkloadController:
         self.pattern_greenlet = None
         self.target_greenlet = None
         self.timing_greenlet = None
+        self.application_check_greenlets = []
         self.rate_scheduler = None
         self.controller_lease = None
         self.transaction_queue = queue.Queue(maxsize=50000)
@@ -939,7 +980,7 @@ class WorkloadController:
     def _validate_start(self, raw: dict):
         if not isinstance(raw, dict):
             raise ValueError("Workload configuration must be an object.")
-        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed", "rate_down_mbps", "rate_up_mbps", "completion_grace_s", "media_pattern", "media_session_s", "live_window_seconds"}:
+        if set(raw) - {"profile", "users", "spawn_rate", "activity", "pattern", "target", "personas", "applications", "media_mode", "label", "paced_mbps", "sparse_share", "generation_mode", "experience_policy", "seed", "rate_down_mbps", "rate_up_mbps", "completion_grace_s", "media_pattern", "media_session_s", "live_window_seconds", "application_checks"}:
             raise ValueError("Unknown workload configuration fields.")
         profile_id = str(raw.get("profile") or "office")
         profile = WORKLOAD_PROFILES.get(profile_id)
@@ -979,6 +1020,11 @@ class WorkloadController:
         if generation_mode == "users" and total_rate:
             raise ValueError("Payload rates require rate mode.")
         paced_mbps = total_rate or None
+        application_checks = raw.get('application_checks', False)
+        if not isinstance(application_checks, bool):
+            raise ValueError('application_checks must be a boolean.')
+        if application_checks and generation_mode == 'rate':
+            raise ValueError('Application checks require user mode; calibration rates must remain isolated.')
         sparse_share = raw.get("sparse_share")
         if sparse_share is not None and paced_mbps is None:
             raise ValueError("sparse_share needs paced_mbps.")
@@ -1021,6 +1067,7 @@ class WorkloadController:
             "applications": applications,
             "media_mode": media_mode,
             "media_pattern": media_pattern,
+            "application_checks": application_checks,
             "live_window_seconds": live_window.window_seconds(raw.get("live_window_seconds", 15)),
             "media_session_s": bounded_number(raw.get("media_session_s", 30), "media_session_s", 1, 300, integer=True),
             # Describes what the run represents, e.g. the site NetEm modelled it on.
@@ -1111,7 +1158,38 @@ class WorkloadController:
 
             self.target_greenlet = gevent.spawn(self._monitor_target, run["run_id"], run["target"])
             self.timing_greenlet = gevent.spawn(self._monitor_target_timing, run)
+            if run.get('application_checks'):
+                self.application_check_greenlets = [gevent.spawn(self._check_application, run, environment, app, index)
+                                                   for index, app in enumerate(APPLICATIONS)]
             return self.status()
+
+    def _check_application(self, run, environment, app, index):
+        from .application_checks import check_interval, enabled_applications
+        user_class = type('ConfiguredApplicationCheck', (ApplicationCheckUser,),
+                          {'abstract': False, 'host': run['target'], 'runtime_config': run})
+        user = user_class(environment)
+        try:
+            user.on_start()
+            gevent.sleep(index * .025)
+            while self.run is run and run.get('status') in ('starting', 'running'):
+                started = time.monotonic()
+                if app in enabled_applications(run) and not (run.get('live_context') or {}).get('until'):
+                    try:
+                        getattr(user, '_app_' + app)()
+                    except Exception:
+                        logging.exception('Application check failed: %s', app)
+                        run.setdefault('application_check_errors', {})[app] = 'Check worker failed; inspect simulator logs'
+                    else:
+                        run.setdefault('application_check_errors', {}).pop(app, None)
+                elif app not in enabled_applications(run):
+                    run.setdefault('application_check_errors', {}).pop(app, None)
+                # Each application has at most one in flight; never catch up in bursts.
+                gevent.sleep(max(.05, check_interval(run) - (time.monotonic() - started)))
+        except Exception:
+            logging.exception('Application check worker could not start: %s', app)
+            run.setdefault('application_check_errors', {})[app] = 'Check worker failed; inspect simulator logs'
+        finally:
+            user.on_stop()
 
     def _monitor_target_timing(self, run):
         from .target_timing import probe
@@ -1334,6 +1412,9 @@ class WorkloadController:
             gevent.sleep(.02)
         if runner:
             runner.quit()
+        for worker in self.application_check_greenlets:
+            worker.kill()
+        self.application_check_greenlets = []
         gevent.with_timeout(5, self.flush_completed)
         finish_run(self.settings.database_path, run_id, "stopped")
         with self.lock:
@@ -1363,7 +1444,7 @@ class WorkloadController:
             run["rate_demand"] = self.rate_scheduler.snapshot()
         pending = run.pop("in_flight", {})
         dem["in_flight"] = {"requests": len(pending), "oldest_age_s": max((time.monotonic() - item.get("started_monotonic", time.monotonic()) for item in pending.values()), default=0)}
-        overdue = [item for item in pending.values() if (time.monotonic() - item.get("started_monotonic", time.monotonic())) * 1000 > run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400)]
+        overdue = [item for item in pending.values() if (time.monotonic() - item.get("started_monotonic", time.monotonic())) * 1000 > item.get('deadline_budget_ms', run.get("policy", {}).get(item.get("application"), {}).get("deadline_ms", 400))]
         if overdue:
             counts = {}
             for item in overdue:
@@ -1390,6 +1471,12 @@ class WorkloadController:
             dem["score_status"] = "provisional"
             if dem.get("business_acceptance") != "fail":
                 dem["business_acceptance"] = "unknown"
+        if run.get('application_check_errors'):
+            dem['scoring_complete'] = False
+            dem['score_status'] = 'provisional'
+            if dem.get('business_acceptance') != 'fail':
+                dem['business_acceptance'] = 'unknown'
+            dem.setdefault('evidence_issues', []).append('application_check_worker_error')
         self._note_timing("status_ms", (time.perf_counter() - started) * 1000.0)
         outdated = target_finding(run.get("target_info"), __version__)
         if outdated:

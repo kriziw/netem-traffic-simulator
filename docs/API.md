@@ -1,5 +1,9 @@
 # API
 
+For bounded synthetic monitoring alongside a small employee population, see
+[Continuous application checks](application-checks.md). User-mode starts accept
+`application_checks: true`; the catalog advertises `continuous-application-checks-v1`.
+
 ## Controller and executor contract
 
 The local UI is read-only; authenticated REST commands remain available to NetEm.

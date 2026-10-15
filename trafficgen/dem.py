@@ -399,6 +399,8 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
                                for kind in {kind for item in evidence for kind in item["events"]}}
         lifecycle["clock_discontinuities"] = sum(item["clock_discontinuities"] for item in evidence)
     reasons = []
+    if lifecycle.get('events', {}).get('application_check_generator_lag'):
+        reasons.append('application_check_generator_lag')
     if lifecycle["overdue_at_end"]:
         reasons.append("outstanding_overdue_operations")
     if lifecycle["clock_discontinuities"]:
@@ -413,7 +415,7 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     if reasons:
         overall["score_status"] = "provisional"
         overall["business_acceptance"] = "unknown" if overall.get("business_acceptance") != "fail" else "fail"
-        if mixed or any(reason in reasons for reason in ("clock_discontinuity", "row_limit", "dropped_transactions")):
+        if mixed or any(reason in reasons for reason in ("clock_discontinuity", "row_limit", "dropped_transactions", "application_check_generator_lag")):
             overall['experience_score'] = None
             overall['measurement_complete'] = False
             overall['sample_confidence'] = 'invalid_evidence'
@@ -428,6 +430,8 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     endpoint_persona = {}
     for row in rows:
         by_app[row["application"] or "other"].append(row)
+        if str(row.get('endpoint_id') or '').startswith('check-'):
+            continue  # Monitoring must not inflate employee/persona counts.
         by_persona[row["persona"] or "unknown"].append(row)
         endpoint_id = row["endpoint_id"] or "unknown"
         by_endpoint[endpoint_id].append(row)
@@ -503,6 +507,10 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
         "personas": persona_summary,
         "endpoints": endpoint_summary,
     }
+    from .application_checks import measurement_counts
+    result['measurement_sources'] = measurement_counts(rows)
+    for app, summary in app_summary.items():
+        summary['measurement_sources'] = measurement_counts(by_app[app])
     from .database import target_timing_rows
     probes = target_timing_rows(database_path, run_id, start, end, intervals)
     values = [item['rtd_ms'] for item in probes if item.get('success') and item.get('rtd_ms') is not None]
@@ -525,6 +533,11 @@ def dem_summary(database_path, run_id=None, window_seconds=60, media_mode="stric
     result["packet_egress_transitions_truncated"] = len(transitions) > 1000
     if diagnosis:
         result["diagnosis"] = diagnose(rows, app_summary, media_mode, scoring_policy=policy, window_seconds=window_seconds)
+        if 'application_check_generator_lag' in reasons:
+            # These symptoms cannot be attributed to the network while the sender stalled.
+            result['diagnosis']['findings'] = []
+            result['diagnosis']['egress'] = {}
+            result['diagnosis']['egress_recent'] = {'window_seconds': 0, 'egress': {}}
         for app, item in app_summary.items():
             if item.get("target_violations") and item.get("scoring_complete"):
                 result["diagnosis"]["findings"].append({
