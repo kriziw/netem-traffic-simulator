@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.2.0...v1.3.0) (2026-10-15)
+
+
+### Features
+
+* add bounded continuous application checks for small sites ([#77](https://github.com/kriziw/netem-traffic-simulator/issues/77)) ([731b94d](https://github.com/kriziw/netem-traffic-simulator/commit/731b94d5089bdd2f74c6c2c326bb1659bee8e5a2))
+
 ## [1.2.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.1.0...v1.2.0) (2026-10-14)
 
 
