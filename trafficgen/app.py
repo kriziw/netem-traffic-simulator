@@ -481,6 +481,7 @@ def create_app():
             "pattern": request.form.get("pattern"),
             "target": request.form.get("target"),
             "live_window_seconds": request.form.get("live_window_seconds") or 15,
+            "application_checks": request.form.get('application_checks') == 'on',
             "media_mode": request.form.get("media_mode") or "strict",
         }
         try:
@@ -1249,7 +1250,7 @@ def create_app():
                 "truncated": summary["truncated"],
                 **{key: summary.get(key) for key in ("scoring_complete", "evidence_issues", "since", "until", "score_model",
                     "policy_source", "application_contributions", "critical_alerts", "coverage_pct", "missing_measurements",
-                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score", "configured_window_seconds", "live_phase_id", "live_context_revision", "window_scope", "collecting_evidence", "live_paused")},
+                    "score_status", "score_range", "business_acceptance", "at_risk", "at_risk_reason", "legacy_score", "configured_window_seconds", "live_phase_id", "live_context_revision", "window_scope", "collecting_evidence", "live_paused", "measurement_sources")},
                 "endpoint_experience": {
                     "score": summary["experience_score"],
                     "rating": summary["experience"],

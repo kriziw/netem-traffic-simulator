@@ -6,7 +6,7 @@ import gevent
 
 
 class Operation:
-    def __init__(self, config, context, emit=None):
+    def __init__(self, config, context, emit=None, pacing_ms=0):
         self.config, self.context, self.emit = config, context, emit
         context.setdefault("operation_id", uuid.uuid4().hex)
         context.setdefault("started_at", time.time())
@@ -14,7 +14,10 @@ class Operation:
         context["started_monotonic"] = self.started
         self.pending = config.setdefault("in_flight", {})
         self.pending[context["operation_id"]] = context
-        self.target_ms = config.get("policy", {}).get(context.get("application"), {}).get("deadline_ms", 400)
+        self.target_ms = config.get("policy", {}).get(context.get("application"), {}).get("deadline_ms", 400) + pacing_ms
+        if pacing_ms:
+            context['deadline_budget_ms'] = self.target_ms
+            context['intentional_pacing_ms'] = pacing_ms
         self.event("started")
         self.timer = gevent.spawn_later(self.target_ms / 1000, self.expire)
 

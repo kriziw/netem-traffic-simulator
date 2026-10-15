@@ -19,6 +19,7 @@
     <form method="post" action="{{ url_for('workload_stop_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn danger" type="submit">Stop</button></form>
   </div>
   <div class="card-body">
+    {% if status.run.application_checks %}<p class="field-help">Continuous application monitoring · {{ (status.dem.get('measurement_sources') or {}).get('application_checks', 0) }} checks in this window, alongside {{ status.users }} users. HTTP objects are capped at 32 KiB. Monitoring contributes to application experience and follows the same workload path; it is not a bulk-capacity measurement.</p>{% endif %}
     <form method="post" action="{{ url_for('workload_adjust_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <div><label>Target users</label><input type="number" name="users" min="1" max="5000" value="{{ status.run.target_users }}"></div>
@@ -38,6 +39,7 @@
     <form method="post" action="{{ url_for('workload_start_ui') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <div><label>Live experience window · seconds</label><input type="number" name="live_window_seconds" value="15" min="5" max="120" step="1" required></div>
+        <div><label><input type="checkbox" name="application_checks"> Continuous application checks</label><p class="muted">Adds bounded monitoring through the workload path without adding employees. Includes monitoring transactions in application experience; not a capacity test.</p></div>
         <div><label>Workload profile</label><select name="profile" id="profile-select">{% for key,item in catalog.profiles.items() %}<option value="{{ key }}">{{ item.label }}</option>{% endfor %}</select></div>
         <div><label>Virtual users</label><input type="number" name="users" min="1" max="5000" value="50"></div>
         <div><label>Spawn rate · users/s</label><input type="number" name="spawn_rate" min="0.1" max="1000" step="0.1" value="5"></div>
