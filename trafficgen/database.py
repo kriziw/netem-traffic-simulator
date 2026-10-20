@@ -23,10 +23,10 @@ TRANSACTION_FIELDS = (
 
 
 @contextmanager
-def connect(path: Path):
+def connect(path: Path, timeout=5):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=5, check_same_thread=False)
+    conn = sqlite3.connect(path, timeout=timeout, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -283,8 +283,12 @@ def write_dem_snapshot(path: Path, snapshot: dict):
 
 def read_dem_snapshot(path: Path):
     """The published DEM snapshot, or None when none has been published or it cannot be read."""
-    with connect(path) as conn:
-        row = conn.execute("SELECT payload FROM dem_snapshots WHERE id = 1").fetchone()
+    try:
+        # Live API reads must not inherit the five-second writer lock timeout.
+        with connect(path, timeout=.05) as conn:
+            row = conn.execute("SELECT payload FROM dem_snapshots WHERE id = 1").fetchone()
+    except sqlite3.OperationalError:
+        return None
     if row is None:
         return None
     try:
@@ -417,3 +421,4 @@ def scoring_contract(path, run_id, since, until):
         health = conn.execute("SELECT dropped FROM run_health WHERE run_id=?", (run_id,)).fetchone()
     payload["dropped_transactions"] = health["dropped"] if health else 0
     return payload, mixed
+

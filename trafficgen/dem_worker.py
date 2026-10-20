@@ -20,7 +20,7 @@ from .dem import dem_summary
 from . import live_window
 
 SNAPSHOT_INTERVAL_S = 1.0     # how often the active run's DEM is recomputed
-SNAPSHOT_MAX_AGE_S = 6.0      # older than this, the workload computes the DEM itself rather than showing stale figures
+SNAPSHOT_MAX_AGE_S = 6.0      # older than this, status reports pending evidence instead of queuing more work
 
 
 def active_run(database_path):
@@ -66,18 +66,35 @@ def fresh_snapshot(snapshot, run_id, now=None, contract_epoch=None, live_revisio
 
 
 def serve(database_path, stop, interval_s=SNAPSHOT_INTERVAL_S):
-    """Publishes a snapshot every interval until stop is set. A failed pass is logged and the next one still runs."""
+    """Live publication never waits for an explicit report aggregation."""
     from .aggregation import process_one
-    next_snapshot = 0
-    while not stop.is_set():
-        try:
-            if time.monotonic() >= next_snapshot:
+
+    def reports():
+        while not stop.is_set():
+            try:
+                processed = process_one(database_path)
+            except Exception:
+                logging.exception("Cannot aggregate a report")
+                processed = False
+            if not processed:
+                stop.wait(.05)
+
+    if stop.is_set():
+        return
+    # Both tasks already run outside the workload interpreter. A separate report
+    # thread also keeps slow queries/database waits off the live publisher loop.
+    worker = threading.Thread(target=reports, name='dem-report-aggregation', daemon=True)
+    worker.start()
+    try:
+        while not stop.is_set():
+            started = time.monotonic()
+            try:
                 publish_once(database_path)
-                next_snapshot = time.monotonic() + interval_s
-            process_one(database_path)
-        except Exception:
-            logging.exception("Cannot publish the DEM snapshot")
-        stop.wait(min(.05, interval_s))
+            except Exception:
+                logging.exception("Cannot publish the DEM snapshot")
+            stop.wait(max(.01, interval_s - (time.monotonic() - started)))
+    finally:
+        worker.join(timeout=1)
 
 
 def _stop_when_stdin_closes(stop):
@@ -100,3 +117,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
