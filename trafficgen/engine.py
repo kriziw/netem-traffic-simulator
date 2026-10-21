@@ -659,6 +659,22 @@ class ApplicationCheckUser(CorporateUser):
         return self._udp_burst(application, packet_size, packets, interval)
 
 
+def pending_live_dem(run=None):
+    """Unavailable live evidence is cheap status data, never an aggregation job."""
+    from .dem import summarize_rows
+    run = run or {}
+    context = run.get('live_context')
+    now = time.time()
+    summary = dict(summarize_rows([]), applications={}, personas={}, endpoints={},
+        diagnosis={'findings': [], 'egress': {}}, run_id=run.get('run_id'),
+        timestamp=now, since=now, until=now, window_seconds=0,
+        interactive_p95_ms=None, requests_per_second=0, failures_per_second=0,
+        evidence_issues=['live_snapshot_pending'] if run else [], truncated=False,
+        score_model=SCORE_MODEL, score_status='unavailable', business_acceptance='unknown',
+        at_risk=False)
+    return live_window.annotate(summary, context) if context else summary
+
+
 class WorkloadController:
     def __init__(self, settings):
         self.settings = settings
@@ -667,6 +683,7 @@ class WorkloadController:
         self.last_pruned = 0
         self.last_sampled = None
         self.persistence_error = None
+        self.dem_sampler_error = None
         self.dropped_transactions = 0
         self.environment = None
         self.runner = None
@@ -797,7 +814,10 @@ class WorkloadController:
                     self.dem_worker = self._start_dem_worker()
                 snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"), live_revision=(run.get("live_context") or {}).get("revision"))
                 if snapshot is None:
-                    # The worker has not published this run recently: sample a DEM computed here, off the event loop.
+                    if os.environ.get("TRAFFICGEN_DEM_WORKER") != "0":
+                        # A slow/missing publisher must not create more work for it.
+                        continue
+                    # Explicit test/development mode has no publishing process.
                     summary = live_window.measure(self.settings.database_path, run["run_id"], run["live_context"],
                                                   media_mode=run.get("media_mode", "strict"), query=self.query_dem, diagnosis=False)
                 elif snapshot["created"] == self.last_sampled:
@@ -821,11 +841,14 @@ class WorkloadController:
                     "score_model": SCORE_MODEL,
                 }
                 offloaded(record_dem_sample, self.settings.database_path, sample)
+                self.dem_sampler_error = None
                 if time.time() - self.last_pruned >= 3600:
                     offloaded(prune_history, self.settings.database_path)
                     self.last_pruned = time.time()
             except Exception as exc:
-                self.persistence_error = str(exc)[:240]
+                # Failure to read/store the display time series is separate from
+                # losing application transactions; a later sample can recover.
+                self.dem_sampler_error = str(exc)[:240]
                 logging.exception("Cannot sample DEM")
 
     def _record_request(
@@ -962,7 +985,14 @@ class WorkloadController:
         )
 
     def _live_dem(self, run):
-        """The DEM of the active run: the worker's snapshot while it is fresh, otherwise computed off the event loop."""
+        """Read the published live DEM; only explicit development mode computes inline."""
+        if os.environ.get("TRAFFICGEN_DEM_WORKER") != "0":
+            # Read the publisher only. Never queue a five-second report calculation
+            # or serialize concurrent status callers behind that calculation.
+            snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path),
+                run["run_id"], contract_epoch=run.get("contract_epoch"),
+                live_revision=(run.get("live_context") or {}).get("revision"))
+            return copy.deepcopy(snapshot["dem"]) if snapshot is not None else pending_live_dem(run)
         with self.dem_lock:
             snapshot = fresh_snapshot(offloaded(read_dem_snapshot, self.settings.database_path), run["run_id"], contract_epoch=run.get("contract_epoch"), live_revision=(run.get("live_context") or {}).get("revision"))
             if snapshot is not None:
@@ -1134,6 +1164,7 @@ class WorkloadController:
             environment.rate_scheduler = self.rate_scheduler
             self.dropped_transactions = 0
             self.persistence_error = None
+            self.dem_sampler_error = None
 
             pattern = PATTERNS[run["pattern"]]
             if pattern["stages"]:
@@ -1436,7 +1467,7 @@ class WorkloadController:
                 "status": "idle",
                 "run": None,
                 "users": 0,
-                "dem": self.query_dem(window_seconds=15),
+                "dem": pending_live_dem(),
             }
         started = time.perf_counter()
         dem = self._live_dem(run)
@@ -1489,6 +1520,7 @@ class WorkloadController:
             "status": run["status"],
             "run": run,
             "users": users,
+            "dem_sampler_error": self.dem_sampler_error,
             "engine_telemetry": self.telemetry(),
             "dem": dem,
         }
@@ -1517,3 +1549,4 @@ class WorkloadController:
                 self.dem_worker.wait(timeout=3)
         self.writer_thread.join(timeout=5)
         self.dem_thread.join(timeout=5)
+

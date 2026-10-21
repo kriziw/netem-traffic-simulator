@@ -128,3 +128,103 @@ def test_a_stale_snapshot_is_recomputed_instead_of_shown(simulator):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_production_live_status_never_enqueues_when_publisher_is_missing(simulator, monkeypatch):
+    import gevent
+    controller = simulator.config['TRAFFICGEN_CONTROLLER']
+    monkeypatch.setenv('TRAFFICGEN_DEM_WORKER', '1')
+    monkeypatch.setattr(controller, 'query_dem', lambda **kw: (_ for _ in ()).throw(AssertionError('status queued aggregation')))
+    run = {'run_id': 'missing', 'status': 'running', 'media_mode': 'strict',
+           'contract_epoch': 3, 'live_context': {'revision': 2, 'phase_id': 'phase-2',
+               'window_seconds': 15, 'until': None}}
+    # Concurrent API reads must return a valid pending payload, retaining run/phase.
+    # A blocked report request or the legacy live lock cannot delay these reads.
+    controller.dem_lock.acquire()
+    try:
+        started = time.monotonic()
+        with gevent.Timeout(1):
+            jobs = [gevent.spawn(controller._live_dem, run) for _ in range(5)]
+            results = [job.get() for job in jobs]
+        assert time.monotonic() - started < 1
+        assert all(item['live_phase_id'] == 'phase-2' and item['experience_score'] is None for item in results)
+        assert all(item['evidence_issues'] == ['live_snapshot_pending'] for item in results)
+        controller.run = run
+        token = controller.settings.api_key_path.read_text().strip()
+        with gevent.Timeout(1):
+            response = simulator.test_client().get('/api/v1/status', headers={'Authorization': 'Bearer ' + token})
+        assert response.status_code == 200
+        assert response.json['status'] == 'running'
+        assert response.json['dem']['live_phase_id'] == 'phase-2'
+        controller.run = None
+        assert controller.status()['status'] == 'idle'
+    finally:
+        controller.dem_lock.release()
+        controller.run = None
+        monkeypatch.setenv('TRAFFICGEN_DEM_WORKER', '0')
+
+
+def test_slow_report_does_not_block_live_publication(tmp_path, monkeypatch):
+    from trafficgen import aggregation
+    entered, release = threading.Event(), threading.Event()
+    published = []
+    stop = threading.Event()
+    def slow_report(path):
+        entered.set()
+        release.wait(3)
+        return False
+    monkeypatch.setattr(aggregation, 'process_one', slow_report)
+    monkeypatch.setattr(dem_worker, 'publish_once', lambda path: published.append(time.monotonic()))
+    thread = threading.Thread(target=dem_worker.serve, args=(tmp_path / 'traffic.db', stop, .02), daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(1)
+        deadline = time.monotonic() + 1
+        while len(published) < 3 and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert len(published) >= 3
+        assert not release.is_set()
+    finally:
+        stop.set()
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive()
+
+
+def test_sampler_failure_does_not_poison_transaction_persistence(simulator, monkeypatch):
+    from trafficgen import engine
+    controller = simulator.config['TRAFFICGEN_CONTROLLER']
+    class OnePass:
+        calls = 0
+        def wait(self, seconds):
+            self.calls += 1
+            return self.calls > 1
+    original = controller.stop_event
+    controller.stop_event = OnePass()
+    controller.run = {'run_id': 'sample-read-error', 'status': 'running'}
+    monkeypatch.setattr(engine, 'offloaded', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('snapshot read failed')))
+    try:
+        controller._dem_loop()
+        assert controller.persistence_error is None
+        assert controller.dropped_transactions == 0
+        assert controller.dem_sampler_error == 'snapshot read failed'
+    finally:
+        controller.stop_event = original
+        controller.run = None
+
+
+def test_live_snapshot_read_has_a_short_database_lock_bound(tmp_path):
+    import sqlite3
+    path = make_database(tmp_path)
+    with sqlite3.connect(path) as conn:
+        conn.execute('PRAGMA journal_mode=DELETE')
+    blocker = sqlite3.connect(path)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        started = time.monotonic()
+        assert database.read_dem_snapshot(path) is None
+        assert time.monotonic() - started < .5
+    finally:
+        blocker.rollback()
+        blocker.close()
