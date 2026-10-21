@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/kriziw/netem-traffic-simulator/compare/v1.3.0...v1.3.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* keep live status responsive during aggregation stalls ([#79](https://github.com/kriziw/netem-traffic-simulator/issues/79)) ([dcdc204](https://github.com/kriziw/netem-traffic-simulator/commit/dcdc204bb5476e71fe864299c70cb0c90096e2cf))
+
 ## [1.3.0](https://github.com/kriziw/netem-traffic-simulator/compare/v1.2.0...v1.3.0) (2026-10-15)
 
 
